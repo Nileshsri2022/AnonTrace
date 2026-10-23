@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'src/ffi/bridge.dart';
@@ -47,6 +48,30 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   bool _isUnlocked = false;
   final List<ConversationSummary> _conversations = [];
   String _myContactLink = '';
+  Timer? _inboxSyncTimer;
+
+  @override
+  void dispose() {
+    _inboxSyncTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startInboxSync() {
+    _inboxSyncTimer?.cancel();
+    _inboxSyncTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!_isUnlocked || !mounted) return;
+      try {
+        final newMsgs = await _bridge.receiveMessages();
+        final updatedConvs = await _bridge.listConversations();
+        if (mounted && (newMsgs.isNotEmpty || updatedConvs.length != _conversations.length)) {
+          setState(() {
+            _conversations.clear();
+            _conversations.addAll(updatedConvs);
+          });
+        }
+      } catch (_) {}
+    });
+  }
 
   Future<void> _unlockApp(String pin) async {
     AppLogger.info('AUTH', 'Unlocking app with user PIN: $pin');
@@ -67,6 +92,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         _conversations.clear();
         _conversations.addAll(convs);
       });
+      _startInboxSync();
       AppLogger.info('AUTH', 'App successfully unlocked. Loaded ${convs.length} conversation(s).');
     } catch (e, st) {
       AppLogger.error('AUTH', 'Unlock failed: $e', e, st);
@@ -84,6 +110,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           onFetchMessages: (convId) => _bridge.listMessages(convId),
           onSendMessage: (convId, text) =>
               _bridge.sendChatMessage(conversationId: convId, text: text),
+          onPollMessages: (convId) =>
+              _bridge.receiveMessages(conversationId: convId),
         ),
       ),
     );

@@ -25,6 +25,9 @@ typedef _ListConvDart = Pointer<Utf8> Function();
 typedef _ListMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _ListMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
+typedef _RecvMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
+typedef _RecvMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> ptr);
 typedef _FreeStringDart = void Function(Pointer<Utf8> ptr);
 
@@ -36,6 +39,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _SendMessageDart? _sendMessageFn;
   _ListConvDart? _listConvFn;
   _ListMsgDart? _listMsgFn;
+  _RecvMsgDart? _recvMsgFn;
   _FreeStringDart? _freeStringFn;
 
   bool _isNativeLoaded = false;
@@ -66,6 +70,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _sendMessageFn = _dylib!.lookupFunction<_SendMessageC, _SendMessageDart>('simple_signal_send_message');
         _listConvFn = _dylib!.lookupFunction<_ListConvC, _ListConvDart>('simple_signal_list_conversations');
         _listMsgFn = _dylib!.lookupFunction<_ListMsgC, _ListMsgDart>('simple_signal_list_messages');
+        _recvMsgFn = _dylib!.lookupFunction<_RecvMsgC, _RecvMsgDart>('simple_signal_receive_messages');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
         _isNativeLoaded = true;
@@ -217,6 +222,25 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
     }
     return List.from(_fallbackMessages[conversationId] ?? []);
+  }
+
+  @override
+  Future<List<MessageSummary>> receiveMessages({String? conversationId}) async {
+    if (_isNativeLoaded && _recvMsgFn != null) {
+      final cConvId = (conversationId ?? '').toNativeUtf8();
+      try {
+        final resPtr = _recvMsgFn!(cConvId);
+        final json = _parseAndFree(resPtr);
+        if (json['success'] == true && json['messages'] != null) {
+          final list = json['messages'] as List<dynamic>;
+          return list.map((m) => MessageSummary.fromJson(m as Map<String, dynamic>)).toList();
+        }
+        return [];
+      } finally {
+        calloc.free(cConvId);
+      }
+    }
+    return [];
   }
 
   @override

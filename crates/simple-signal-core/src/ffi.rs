@@ -160,3 +160,29 @@ pub unsafe extern "C" fn simple_signal_list_messages(conv_id_ptr: *const c_char)
         Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
     }
 }
+
+/// Polls and decrypts incoming messages from the SMP relay queue.
+/// If conv_id_ptr is provided and non-empty, filters for that conversation; otherwise syncs all.
+/// Returns JSON: {"success": true, "messages": [...]} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_receive_messages(conv_id_ptr: *const c_char) -> *mut c_char {
+    let conv_id = if conv_id_ptr.is_null() {
+        ""
+    } else {
+        match unsafe { to_rust_str(conv_id_ptr) } {
+            Ok(s) => s,
+            Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+        }
+    };
+
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.receive_incoming_messages(conv_id) {
+        Ok(list) => to_c_string(json!({"success": true, "messages": list}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}

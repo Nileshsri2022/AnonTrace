@@ -38,4 +38,14 @@ fn test_ffi_lifecycle() {
     assert_eq!(list_json["success"], true);
     assert!(list_json["conversations"].as_array().unwrap().is_empty());
     unsafe { simple_signal_free_string(list_res_ptr) };
+
+    // 4. Test receive_messages over FFI (initially empty)
+    let c_empty = CString::new("").unwrap();
+    let recv_res_ptr = unsafe { simple_signal_receive_messages(c_empty.as_ptr()) };
+    assert!(!recv_res_ptr.is_null());
+    let recv_str = unsafe { CStr::from_ptr(recv_res_ptr).to_str().unwrap() };
+    let recv_json: Value = serde_json::from_str(recv_str).unwrap();
+    assert_eq!(recv_json["success"], true);
+    assert!(recv_json["messages"].as_array().unwrap().is_empty());
+    unsafe { simple_signal_free_string(recv_res_ptr) };
 }

@@ -66,6 +66,11 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   }
 
   @override
+  Future<List<MessageSummary>> receiveMessages({String? conversationId}) async {
+    return [];
+  }
+
+  @override
   Future<void> setDormant(bool dormant) async {}
 
   @override

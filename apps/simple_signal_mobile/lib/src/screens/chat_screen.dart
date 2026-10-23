@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../ffi/bridge.dart';
 
@@ -5,12 +6,14 @@ class ChatScreen extends StatefulWidget {
   final ConversationSummary conversation;
   final Future<List<MessageSummary>> Function(String convId) onFetchMessages;
   final Future<MessageSummary> Function(String convId, String text) onSendMessage;
+  final Future<List<MessageSummary>> Function(String convId)? onPollMessages;
 
   const ChatScreen({
     Key? key,
     required this.conversation,
     required this.onFetchMessages,
     required this.onSendMessage,
+    this.onPollMessages,
   }) : super(key: key);
 
   @override
@@ -21,11 +24,38 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _msgController = TextEditingController();
   final List<MessageSummary> _messages = [];
   bool _isLoading = true;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _loadMessages();
+    _startPolling();
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _msgController.dispose();
+    super.dispose();
+  }
+
+  void _startPolling() {
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
+      if (!mounted || widget.onPollMessages == null) return;
+      try {
+        final incoming = await widget.onPollMessages!(widget.conversation.id);
+        if (incoming.isNotEmpty && mounted) {
+          setState(() {
+            for (final msg in incoming) {
+              if (!_messages.any((m) => m.id == msg.id)) {
+                _messages.add(msg);
+              }
+            }
+          });
+        }
+      } catch (_) {}
+    });
   }
 
   Future<void> _loadMessages() async {

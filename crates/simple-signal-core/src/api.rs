@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use crate::contact::handshake::{initiate_contact_exchange, QueueCoordinates};
+use crate::contact::handshake::{
+    accept_contact_handshake, initiate_contact_exchange, ContactHandshakeMessage, QueueCoordinates,
+};
 use crate::contact::link::{ContactLink, ContactLinkError};
 use crate::contact::storage::persist_contact_conversation;
 use crate::crypto::pqxdh::{
@@ -165,16 +167,21 @@ impl SimpleSignalApp {
         })
     }
 
+    /// Returns the user's permanent local inbox queue ID derived from Ed25519 identity key.
+    pub fn my_inbox_queue_id(&self) -> String {
+        let queue_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
+        format!("q_inbox_{}", queue_suffix)
+    }
+
     /// Generates the user's standardized Contact Link for QR display.
     /// Omits kpk from the optical QR URI so it fits cleanly into standard QR codes (< 500 chars).
     pub fn get_my_contact_link(&self) -> Result<String, FfiError> {
-        let queue_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
         let mut qr_bundle = self.prekey_bundle.clone();
         qr_bundle.kyber_prekey = Vec::new();
 
         let link = ContactLink {
             relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
-            receive_queue_id: format!("q_inbox_{}", queue_suffix),
+            receive_queue_id: self.my_inbox_queue_id(),
             sender_auth_key: vec![0x11; 32],
             prekey_bundle: qr_bundle,
         };
@@ -188,14 +195,13 @@ impl SimpleSignalApp {
     pub fn import_contact_link(&self, uri: &str) -> Result<ConversationSummary, FfiError> {
         let remote_link = ContactLink::from_uri(uri)?;
 
-        let return_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
         let my_return_queue = QueueCoordinates {
             relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
-            queue_id: format!("q_ret_{}", return_suffix),
+            queue_id: self.my_inbox_queue_id(),
             sender_auth_key: vec![0x22; 32],
         };
 
-        let (_handshake_msg, session) =
+        let (handshake_msg, session) =
             initiate_contact_exchange(&remote_link, &self.identity, my_return_queue.clone())?;
 
         let conversation_id = format!("conv_{}", hex::encode(&remote_link.prekey_bundle.identity_key[..6]));
@@ -214,6 +220,13 @@ impl SimpleSignalApp {
             &my_return_queue.queue_id,
             &session_bytes,
         )?;
+
+        // Transmit handshake message to partner's receive queue so they establish matching receiver session
+        if let Ok(handshake_bytes) = handshake_msg.to_bytes() {
+            let mut framed = vec![0x00]; // 0x00 = Handshake frame
+            framed.extend_from_slice(&handshake_bytes);
+            crate::net::smp::SmpRelayHub::global().send_to_queue(&remote_link.receive_queue_id, framed);
+        }
 
         // Cache active session in memory
         self.active_sessions
@@ -250,9 +263,26 @@ impl SimpleSignalApp {
             .get_mut(conversation_id)
             .ok_or_else(|| FfiError::NotFound("Active session not found".to_string()))?;
 
-        let _ciphertext = session
+        let ciphertext = session
             .encrypt(text.as_bytes())
             .map_err(|e| FfiError::CryptoError(e.to_string()))?;
+
+        // Lookup conversation details to transmit across SMP relay queue
+        if let Ok(Some(conv)) = self.db.get_conversation(conversation_id) {
+            let partner_queue_id = conv
+                .send_queue_uri
+                .split('/')
+                .last()
+                .unwrap_or(&conv.send_queue_uri);
+
+            // Framed wire protocol: [0x01 (Message Frame), 32-byte sender identity key, ciphertext]
+            let mut framed = Vec::with_capacity(1 + 32 + ciphertext.len());
+            framed.push(0x01);
+            framed.extend_from_slice(&self.identity.verifying_key.to_bytes());
+            framed.extend_from_slice(&ciphertext);
+
+            crate::net::smp::SmpRelayHub::global().send_to_queue(partner_queue_id, framed);
+        }
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -286,6 +316,134 @@ impl SimpleSignalApp {
         self.db.insert_message(&record)?;
 
         Ok(MessageSummary::from(record))
+    }
+
+    /// Polls incoming messages from the user's SMP inbox queue across all conversations,
+    /// processes handshake invitations or decrypts Double Ratchet messages,
+    /// inserts them into local storage as "inbound", and acknowledges delivery.
+    pub fn sync_inbox(&self) -> Result<Vec<MessageSummary>, FfiError> {
+        let my_queue = self.my_inbox_queue_id();
+        let payloads = crate::net::smp::SmpRelayHub::global().poll_and_ack(&my_queue);
+        if payloads.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut received_messages = Vec::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        for (msg_id, payload) in payloads {
+            if payload.is_empty() {
+                continue;
+            }
+
+            match payload[0] {
+                0x00 => {
+                    // Handshake frame: [0x00, JSON ContactHandshakeMessage]
+                    if let Ok(handshake) = ContactHandshakeMessage::from_bytes(&payload[1..]) {
+                        let conv_id = format!(
+                            "conv_{}",
+                            hex::encode(&handshake.pqxdh.sender_identity_key[..6])
+                        );
+
+                        // If we already sent outbound messages on this conversation, do not overwrite our session
+                        let has_outbound = self
+                            .db
+                            .list_messages(&conv_id)
+                            .map(|msgs| msgs.iter().any(|m| m.direction == "outbound"))
+                            .unwrap_or(false);
+
+                        if !has_outbound {
+                            if let Ok((session, return_queue)) = accept_contact_handshake(
+                                &handshake,
+                                &self.identity,
+                                &self._prekey_secrets,
+                            ) {
+                                if let Ok(session_bytes) = session.to_bytes() {
+                                    let _ = persist_contact_conversation(
+                                        &self.db,
+                                        &conv_id,
+                                        &return_queue,
+                                        &my_queue,
+                                        &session_bytes,
+                                    );
+                                    let mut sessions = self.active_sessions.lock().unwrap();
+                                    sessions.insert(conv_id, session);
+                                }
+                            }
+                        }
+                    }
+                }
+                0x01 => {
+                    // Encrypted message frame: [0x01, 32-byte sender_identity_key, ciphertext]
+                    if payload.len() < 1 + 32 + 68 {
+                        continue;
+                    }
+
+                    let mut sender_key = [0u8; 32];
+                    sender_key.copy_from_slice(&payload[1..33]);
+                    let conv_id = format!("conv_{}", hex::encode(&sender_key[..6]));
+                    let ciphertext = &payload[33..];
+
+                    let mut sessions = self.active_sessions.lock().unwrap();
+                    if !sessions.contains_key(&conv_id) {
+                        if let Ok(Some(session_rec)) = self.db.get_latest_session(&conv_id) {
+                            if let Ok(restored) = DoubleRatchetSession::from_bytes(&session_rec.session_record) {
+                                sessions.insert(conv_id.clone(), restored);
+                            }
+                        }
+                    }
+
+                    if let Some(session) = sessions.get_mut(&conv_id) {
+                        if let Ok(plaintext_bytes) = session.decrypt(ciphertext) {
+                            if let Ok(plaintext) = String::from_utf8(plaintext_bytes) {
+                                let record = MessageRecord {
+                                    id: msg_id,
+                                    conversation_id: conv_id.clone(),
+                                    direction: "inbound".to_string(),
+                                    body: plaintext.as_bytes().to_vec(),
+                                    timestamp: now,
+                                    status: "received".to_string(),
+                                };
+
+                                let _ = self.db.insert_message(&record);
+                                received_messages.push(MessageSummary::from(record));
+
+                                if let Ok(updated_bytes) = session.to_bytes() {
+                                    let _ = self.db.insert_session(&SessionRecord {
+                                        conversation_id: conv_id,
+                                        session_record: updated_bytes,
+                                        updated_at: now,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown wire frame tag - discard safely
+                }
+            }
+        }
+
+        Ok(received_messages)
+    }
+
+    /// Polls incoming messages from the SMP relay queue for a specific conversation.
+    pub fn receive_incoming_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<MessageSummary>, FfiError> {
+        let all_received = self.sync_inbox()?;
+        if conversation_id.is_empty() {
+            return Ok(all_received);
+        }
+        Ok(all_received
+            .into_iter()
+            .filter(|m| m.conversation_id == conversation_id)
+            .collect())
     }
 
     /// Lists all conversations ordered by recent activity.

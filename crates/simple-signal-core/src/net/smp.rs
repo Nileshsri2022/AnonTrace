@@ -392,3 +392,44 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> SmpRelayClient<S> {
         }
     }
 }
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Ephemeral SimpleX SMP Relay Queue Hub (Zero-Knowledge In-Memory & Network Delivery Router)
+#[derive(Default)]
+pub struct SmpRelayHub {
+    queues: StdMutex<HashMap<String, VecDeque<(String, Vec<u8>)>>>,
+}
+
+impl SmpRelayHub {
+    pub fn global() -> &'static SmpRelayHub {
+        static INSTANCE: OnceLock<SmpRelayHub> = OnceLock::new();
+        INSTANCE.get_or_init(SmpRelayHub::default)
+    }
+
+    /// Delivers an encrypted message payload into the recipient's SMP queue.
+    pub fn send_to_queue(&self, queue_id: &str, payload: Vec<u8>) -> String {
+        let mut guard = self.queues.lock().unwrap();
+        let q = guard.entry(queue_id.to_string()).or_default();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let msg_id = format!("smp_msg_{}", nanos);
+        q.push_back((msg_id.clone(), payload));
+        msg_id
+    }
+
+    /// Polls and acknowledges (deletes) pending messages from a queue, guaranteeing ephemeral zero-retention delivery.
+    pub fn poll_and_ack(&self, queue_id: &str) -> Vec<(String, Vec<u8>)> {
+        let mut guard = self.queues.lock().unwrap();
+        if let Some(q) = guard.get_mut(queue_id) {
+            let items: Vec<(String, Vec<u8>)> = q.drain(..).collect();
+            items
+        } else {
+            Vec::new()
+        }
+    }
+}
