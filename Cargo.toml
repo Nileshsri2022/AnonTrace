@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "crates/simple-signal-core",
+]
+resolver = "2"
