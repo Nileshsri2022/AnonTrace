@@ -1,2 +1,11 @@
-.claude
 /target
+.claude
+*.apk
+*.deb
+*.tgz
+*.tar.zst
+*.sqlite
+/lib/
+/usr/
+/package/
+AndroidManifest.xml
