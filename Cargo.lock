@@ -3309,6 +3309,8 @@ dependencies = [
  "rand 0.8.8",
  "regex",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 1.0.69",

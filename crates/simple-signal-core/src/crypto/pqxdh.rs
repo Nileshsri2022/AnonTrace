@@ -100,7 +100,7 @@ pub fn generate_prekey_bundle(
     (bundle, secrets)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PqxdhMessage {
     pub sender_identity_key: [u8; 32],
     pub sender_identity_dh_key: [u8; 32],

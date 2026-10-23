@@ -235,4 +235,70 @@ impl DoubleRatchetSession {
             }
         }
     }
+
+    /// Serializes the ratchet session state into bytes for secure persistence in database
+    pub fn to_bytes(&self) -> Result<Vec<u8>, CryptoError> {
+        let snapshot = RatchetStateSnapshot {
+            dhs_bytes: self.dhs.to_bytes(),
+            dhs_pub: *self.dhs_pub.as_bytes(),
+            dhr_pub: self.dhr.as_ref().map(|pk| *pk.as_bytes()),
+            rk: self.rk,
+            cks: self.cks,
+            ckr: self.ckr,
+            ns: self.ns,
+            nr: self.nr,
+            pn: self.pn,
+            mkskipped: self
+                .mkskipped
+                .iter()
+                .map(|(&(pk, n), &mk)| (pk, n, mk))
+                .collect(),
+        };
+
+        serde_json::to_vec(&snapshot)
+            .map_err(|e| CryptoError::KeyExchangeFailed(format!("Session serialize failed: {}", e)))
+    }
+
+    /// Deserializes a ratchet session from stored bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        let snapshot: RatchetStateSnapshot = serde_json::from_slice(bytes)
+            .map_err(|e| CryptoError::KeyExchangeFailed(format!("Session deserialize failed: {}", e)))?;
+
+        let dhs = StaticSecret::from(snapshot.dhs_bytes);
+        let dhs_pub = XPublicKey::from(snapshot.dhs_pub);
+        let dhr = snapshot.dhr_pub.map(XPublicKey::from);
+
+        let mkskipped = snapshot
+            .mkskipped
+            .into_iter()
+            .map(|(pk, n, mk)| ((pk, n), mk))
+            .collect();
+
+        Ok(Self {
+            dhs,
+            dhs_pub,
+            dhr,
+            rk: snapshot.rk,
+            cks: snapshot.cks,
+            ckr: snapshot.ckr,
+            ns: snapshot.ns,
+            nr: snapshot.nr,
+            pn: snapshot.pn,
+            mkskipped,
+        })
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RatchetStateSnapshot {
+    dhs_bytes: [u8; 32],
+    dhs_pub: [u8; 32],
+    dhr_pub: Option<[u8; 32]>,
+    rk: [u8; 32],
+    cks: Option<[u8; 32]>,
+    ckr: Option<[u8; 32]>,
+    ns: u32,
+    nr: u32,
+    pn: u32,
+    mkskipped: Vec<([u8; 32], u32, [u8; 32])>,
 }
