@@ -1,4 +1,4 @@
-package com.example.simple_signal_mobile
+package network.anontrace.app
 
 import io.flutter.embedding.android.FlutterActivity
 

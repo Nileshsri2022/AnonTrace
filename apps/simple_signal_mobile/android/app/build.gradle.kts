@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.simple_signal_mobile"
+    namespace = "network.anontrace.app"
     compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
@@ -20,7 +20,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.simple_signal_mobile"
+        applicationId = "network.anontrace.app"
         minSdk = 24
         targetSdk = 35
         versionCode = flutter.versionCode
@@ -28,7 +28,11 @@ android {
     }
 
     signingConfigs {
-        getByName("debug") {
+        create("release") {
+            storeFile = file("anontrace.jks")
+            storePassword = "anontrace123"
+            keyAlias = "anontrace"
+            keyPassword = "anontrace123"
             enableV1Signing = true
             enableV2Signing = true
         }
@@ -36,7 +40,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

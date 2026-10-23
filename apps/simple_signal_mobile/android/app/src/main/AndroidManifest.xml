@@ -39,6 +39,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Foreground service required by flutter_foreground_task for Android 14+ -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="remoteMessaging"
+            android:exported="false" />
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
