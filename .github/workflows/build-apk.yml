@@ -56,14 +56,14 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleSignal-${{ github.ref_name }}-APK
+          name: AnonTrace-${{ github.ref_name }}-APK
           path: apps/simple_signal_mobile/build/app/outputs/flutter-apk/*.apk
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Simple+Signal ${{ github.ref_name }}
+          name: AnonTrace ${{ github.ref_name }}
           draft: false
           prerelease: false
           files: apps/simple_signal_mobile/build/app/outputs/flutter-apk/*.apk

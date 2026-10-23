@@ -1,6 +1,6 @@
 {
-    "name": "Simple+Signal",
-    "short_name": "Simple+Signal",
+    "name": "AnonTrace",
+    "short_name": "AnonTrace",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#101418",

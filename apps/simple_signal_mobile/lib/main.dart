@@ -15,7 +15,7 @@ class SimpleSignalAppWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Simple+Signal',
+      title: 'AnonTrace',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF101418),
@@ -110,7 +110,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             Icon(Icons.circle, size: 10, color: Colors.greenAccent),
             SizedBox(width: 8),
             Text(
-              'Simple+Signal',
+              'AnonTrace',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
           ],

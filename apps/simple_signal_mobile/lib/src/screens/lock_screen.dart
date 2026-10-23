@@ -54,7 +54,7 @@ class _LockScreenState extends State<LockScreen> {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'Simple + Signal',
+                  'AnonTrace',
                   style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.bold,

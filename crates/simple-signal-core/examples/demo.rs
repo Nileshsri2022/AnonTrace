@@ -4,7 +4,7 @@ use simple_signal_core::api::SimpleSignalApp;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
-    println!("         SIMPLE+SIGNAL: POST-QUANTUM ANONYMOUS CHAT         ");
+    println!("           ANONTRACE: POST-QUANTUM ANONYMOUS CHAT           ");
     println!("   Signal Cryptography + SimpleX Metadata-Free Routing      ");
     println!("============================================================\n");
 
