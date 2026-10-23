@@ -3,6 +3,9 @@ name = "simple-signal-core"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 argon2 = "0.5"
 thiserror = "1.0"

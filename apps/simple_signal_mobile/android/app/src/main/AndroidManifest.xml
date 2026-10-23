@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="network.simplex.signal.hybrid">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -36,12 +35,6 @@
                 <data android:scheme="simplex" />
             </intent-filter>
         </activity>
-
-        <!-- Android Foreground Service for Remote Messaging over Tor -->
-        <service
-            android:name=".SimpleSignalBackgroundService"
-            android:foregroundServiceType="remoteMessaging"
-            android:exported="false" />
 
         <meta-data
             android:name="flutterEmbedding"
