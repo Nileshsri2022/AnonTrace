@@ -1,11 +1,11 @@
 {
-    "name": "simple_signal_mobile",
-    "short_name": "simple_signal_mobile",
+    "name": "Simple+Signal",
+    "short_name": "Simple+Signal",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#101418",
+    "theme_color": "#2C6BED",
+    "description": "Metadata-free, post-quantum end-to-end encrypted messaging over Tor",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
