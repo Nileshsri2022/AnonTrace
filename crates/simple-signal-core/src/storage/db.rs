@@ -369,4 +369,52 @@ impl EncryptedDatabase {
         )?;
         Ok(count as usize)
     }
+
+    /// Lists all conversation records ordered by created_at DESC
+    pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, send_queue_uri, receive_queue_id, relay_onion_address, sender_auth_key, created_at
+             FROM conversations ORDER BY created_at DESC;",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ConversationRecord {
+                id: row.get(0)?,
+                send_queue_uri: row.get(1)?,
+                receive_queue_id: row.get(2)?,
+                relay_onion_address: row.get(3)?,
+                sender_auth_key: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    /// Lists all message records for a conversation ordered by timestamp ASC
+    pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<MessageRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, direction, body, timestamp, status
+             FROM messages WHERE conversation_id = ?1 ORDER BY timestamp ASC;",
+        )?;
+        let rows = stmt.query_map(params![conversation_id], |row| {
+            Ok(MessageRecord {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                direction: row.get(2)?,
+                body: row.get(3)?,
+                timestamp: row.get(4)?,
+                status: row.get(5)?,
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
 }
