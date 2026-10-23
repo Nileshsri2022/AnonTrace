@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use thiserror::Error;
@@ -35,9 +36,24 @@ pub struct TorTransportConfig {
     pub strict_tor_only: bool,
 }
 
-pub struct TorClientManager {
+impl Default for TorTransportConfig {
+    fn default() -> Self {
+        Self {
+            data_directory: PathBuf::from("./tor_data"),
+            socks_port: None,
+            strict_tor_only: true,
+        }
+    }
+}
+
+struct TorClientInner {
     config: TorTransportConfig,
     dormancy: DormancyMode,
+}
+
+#[derive(Clone)]
+pub struct TorClientManager {
+    inner: Arc<Mutex<TorClientInner>>,
 }
 
 impl TorClientManager {
@@ -48,14 +64,21 @@ impl TorClientManager {
         }
 
         Ok(Self {
-            config,
-            dormancy: DormancyMode::Active,
+            inner: Arc::new(Mutex::new(TorClientInner {
+                config,
+                dormancy: DormancyMode::Active,
+            })),
         })
     }
 
+    /// Creates a default TorClientManager instance
+    pub fn default_client() -> Self {
+        Self::new(TorTransportConfig::default()).expect("default tor client")
+    }
+
     /// Returns current config
-    pub fn config(&self) -> &TorTransportConfig {
-        &self.config
+    pub fn config(&self) -> TorTransportConfig {
+        self.inner.lock().unwrap().config.clone()
     }
 
     /// Derives a cryptographically isolated circuit token for a specific pairwise queue.
@@ -73,18 +96,23 @@ impl TorClientManager {
 
     /// Returns current dormancy state
     pub fn dormancy_state(&self) -> DormancyMode {
-        self.dormancy
+        self.inner.lock().unwrap().dormancy
+    }
+
+    /// Returns true if the client is actively connected (not dormant)
+    pub fn is_active(&self) -> bool {
+        self.dormancy_state() == DormancyMode::Active
     }
 
     /// Transitions Tor client into soft dormant mode to conserve mobile battery
-    pub fn set_dormancy(&mut self, mode: DormancyMode) -> Result<(), TorError> {
-        self.dormancy = mode;
+    pub fn set_dormancy(&self, mode: DormancyMode) -> Result<(), TorError> {
+        self.inner.lock().unwrap().dormancy = mode;
         Ok(())
     }
 
     /// Awakens the Tor client from dormancy upon incoming push notification
-    pub fn wake_up(&mut self) -> Result<(), TorError> {
-        self.dormancy = DormancyMode::Active;
+    pub fn wake_up(&self) -> Result<(), TorError> {
+        self.inner.lock().unwrap().dormancy = DormancyMode::Active;
         Ok(())
     }
 }

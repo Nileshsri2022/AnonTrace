@@ -41,7 +41,7 @@ async fn test_tor_dormancy_lifecycle_transitions() {
         strict_tor_only: true,
     };
 
-    let mut manager = TorClientManager::new(config).expect("create manager");
+    let manager = TorClientManager::new(config).expect("create manager");
 
     // Initially active
     assert_eq!(manager.dormancy_state(), DormancyMode::Active);
