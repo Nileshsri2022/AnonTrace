@@ -1,3 +1,4 @@
+
 name: Build & Release Android APK
 
 on:
@@ -6,11 +7,18 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Default to read-only permissions.
 permissions:
-  contents: write
+  contents: read
+
+# Avoid overlapping builds for the same ref.
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -19,72 +27,159 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract Tag Message for Release Body
-        id: extract_tag
-        run: |
-          # Extract the exact message provided during tagging (e.g. git tag -a v1.0.0 -m "My Message")
-          MSG=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
-          if [ -z "$MSG" ]; then
-            MSG=$(git log -1 --pretty=%B)
-          fi
-          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
-          echo "$MSG" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Setup Rust & Android NDK Targets
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdkmanager --install "ndk;27.2.12479018"
+
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" \
+            >> "$GITHUB_ENV"
+
+      - name: Setup Rust and Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/simple-signal-core -> target
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Compile Rust Core for Android NDK
+      - name: Test Rust Core
+        working-directory: crates/simple-signal-core
+        run: cargo test --locked
+
+      - name: Compile Rust Core for Android
+        working-directory: crates/simple-signal-core
         run: |
-          cd crates/simple-signal-core
+          set -euo pipefail
+
           cargo ndk \
             -t arm64-v8a \
             -t armeabi-v7a \
             -t x86_64 \
             -o ../../apps/simple_signal_mobile/android/app/src/main/jniLibs \
-            build --release
+            build --release --locked
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
           cache: true
 
-      - name: Install Dependencies
-        run: |
-          cd apps/simple_signal_mobile
-          flutter pub get
+      - name: Install Flutter Dependencies
+        working-directory: apps/simple_signal_mobile
+        run: flutter pub get
+
+      - name: Run Flutter Tests
+        working-directory: apps/simple_signal_mobile
+        run: flutter test
 
       - name: Build Android Release APK
+        working-directory: apps/simple_signal_mobile
+        run: flutter build apk --release
+
+      - name: Verify APK Output
+        shell: bash
         run: |
-          cd apps/simple_signal_mobile
-          flutter build apk --release
+          set -euo pipefail
+
+          APK_DIR="apps/simple_signal_mobile/build/app/outputs/flutter-apk"
+
+          if ! compgen -G "$APK_DIR/*.apk" > /dev/null; then
+            echo "::error::No APK files were generated."
+            exit 1
+          fi
+
+          ls -lh "$APK_DIR"/*.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AnonTrace-${{ github.ref_name }}-APK
           path: apps/simple_signal_mobile/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Manual runs build an artifact but do not publish a release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository with Tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AnonTrace-${{ github.ref_name }}-APK
+          path: dist
+
+      - name: Verify Release Files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! compgen -G "dist/*.apk" > /dev/null; then
+            echo "::error::No APK found for release."
+            exit 1
+          fi
+
+          ls -lh dist/*.apk
+
+      - name: Prepare Release Notes
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git tag -l --format='%(contents)' "$TAG_NAME" \
+            > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            git log -1 --format='%B' "$COMMIT_SHA" \
+              > release-notes.md
+          fi
+
+          if [ ! -s release-notes.md ]; then
+            echo "Release $TAG_NAME" > release-notes.md
+          fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: AnonTrace ${{ github.ref_name }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
-          files: apps/simple_signal_mobile/build/app/outputs/flutter-apk/*.apk
-          body: ${{ env.RELEASE_BODY }}
+          files: dist/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
