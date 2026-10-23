@@ -136,17 +136,22 @@ pub fn initiate_pqxdh(
     // DH4 = X25519(E_b, A_onetime_prekey)
     let dh4 = ephemeral_secret.diffie_hellman(&alice_one_time_prekey);
 
-    // ML-KEM-1024 Encapsulation
-    let ek = ml_kem_1024::EncapsKey::try_from_bytes(
-        recipient_bundle.kyber_prekey.as_slice().try_into().map_err(|_| {
-            CryptoError::KeyExchangeFailed("Invalid Kyber public key length".to_string())
-        })?,
-    )
-    .map_err(|e| CryptoError::KeyExchangeFailed(format!("Invalid Kyber key: {:?}", e)))?;
+    // ML-KEM-1024 Encapsulation (hybrid PQXDH when Kyber prekey is present, X3DH when omitted)
+    let (ss_pq, ct_bytes) = if !recipient_bundle.kyber_prekey.is_empty() {
+        let ek = ml_kem_1024::EncapsKey::try_from_bytes(
+            recipient_bundle.kyber_prekey.as_slice().try_into().map_err(|_| {
+                CryptoError::KeyExchangeFailed("Invalid Kyber public key length".to_string())
+            })?,
+        )
+        .map_err(|e| CryptoError::KeyExchangeFailed(format!("Invalid Kyber key: {:?}", e)))?;
 
-    let (ss_pq, ct) = ek
-        .try_encaps()
-        .map_err(|e| CryptoError::KeyExchangeFailed(format!("Kyber encaps error: {:?}", e)))?;
+        let (ss, ct) = ek
+            .try_encaps()
+            .map_err(|e| CryptoError::KeyExchangeFailed(format!("Kyber encaps error: {:?}", e)))?;
+        (ss.into_bytes().to_vec(), ct.into_bytes().to_vec())
+    } else {
+        (vec![0u8; 32], Vec::new())
+    };
 
     // Combine DH1 || DH2 || DH3 || DH4 || SS_PQ with HKDF-SHA256
     let mut ikm = Vec::with_capacity(32 * 4 + 32);
@@ -154,7 +159,7 @@ pub fn initiate_pqxdh(
     ikm.extend_from_slice(dh2.as_bytes());
     ikm.extend_from_slice(dh3.as_bytes());
     ikm.extend_from_slice(dh4.as_bytes());
-    ikm.extend_from_slice(&ss_pq.into_bytes());
+    ikm.extend_from_slice(&ss_pq);
 
     let hk = Hkdf::<Sha256>::new(None, &ikm);
     let mut master_key = [0u8; 32];
@@ -165,7 +170,7 @@ pub fn initiate_pqxdh(
         sender_identity_key: sender_identity.verifying_key.to_bytes(),
         sender_identity_dh_key: *sender_identity.dh_public.as_bytes(),
         sender_ephemeral_key: *ephemeral_public.as_bytes(),
-        kyber_ciphertext: ct.into_bytes().to_vec(),
+        kyber_ciphertext: ct_bytes,
         one_time_prekey_id: recipient_bundle.one_time_prekey_id,
     };
 
@@ -189,18 +194,24 @@ pub fn process_pqxdh_initiation(
     // DH4 = X25519(A_onetime_prekey, E_b)
     let dh4 = recipient_secrets.one_time_prekey_secret.diffie_hellman(&bob_ephemeral);
 
-    // ML-KEM-1024 Decapsulation
-    let ct = ml_kem_1024::CipherText::try_from_bytes(
-        message.kyber_ciphertext.as_slice().try_into().map_err(|_| {
-            CryptoError::KeyExchangeFailed("Invalid Kyber ciphertext length".to_string())
-        })?,
-    )
-    .map_err(|e| CryptoError::KeyExchangeFailed(format!("Invalid ciphertext: {:?}", e)))?;
+    // ML-KEM-1024 Decapsulation (hybrid PQXDH when ciphertext is present, X3DH when empty)
+    let ss_pq = if !message.kyber_ciphertext.is_empty() {
+        let ct = ml_kem_1024::CipherText::try_from_bytes(
+            message.kyber_ciphertext.as_slice().try_into().map_err(|_| {
+                CryptoError::KeyExchangeFailed("Invalid Kyber ciphertext length".to_string())
+            })?,
+        )
+        .map_err(|e| CryptoError::KeyExchangeFailed(format!("Invalid ciphertext: {:?}", e)))?;
 
-    let ss_pq = recipient_secrets
-        .kyber_secret
-        .try_decaps(&ct)
-        .map_err(|e| CryptoError::KeyExchangeFailed(format!("Kyber decaps error: {:?}", e)))?;
+        recipient_secrets
+            .kyber_secret
+            .try_decaps(&ct)
+            .map_err(|e| CryptoError::KeyExchangeFailed(format!("Kyber decaps error: {:?}", e)))?
+            .into_bytes()
+            .to_vec()
+    } else {
+        vec![0u8; 32]
+    };
 
     // Combine matching DH1 || DH2 || DH3 || DH4 || SS_PQ with HKDF-SHA256
     let mut ikm = Vec::with_capacity(32 * 4 + 32);
@@ -208,7 +219,7 @@ pub fn process_pqxdh_initiation(
     ikm.extend_from_slice(dh2.as_bytes());
     ikm.extend_from_slice(dh3.as_bytes());
     ikm.extend_from_slice(dh4.as_bytes());
-    ikm.extend_from_slice(&ss_pq.into_bytes());
+    ikm.extend_from_slice(&ss_pq);
 
     let hk = Hkdf::<Sha256>::new(None, &ikm);
     let mut master_key = [0u8; 32];

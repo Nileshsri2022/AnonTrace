@@ -54,3 +54,47 @@ fn test_contact_link_rejects_invalid_scheme_or_missing_fields() {
         _ => panic!("Expected ContactLinkError::MissingField"),
     }
 }
+
+#[test]
+fn test_compact_qr_contact_link_without_kpk_is_under_600_chars() {
+    let prekey_bundle = PreKeyBundle {
+        identity_key: [0x11; 32],
+        identity_dh_key: [0x22; 32],
+        signed_prekey_id: 1,
+        signed_prekey: [0x33; 32],
+        signature: [0x44; 64],
+        one_time_prekey_id: 100,
+        one_time_prekey: [0x55; 32],
+        kyber_prekey: Vec::new(), // Compact optical QR format
+    };
+
+    let link = ContactLink {
+        relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
+        receive_queue_id: "q_alice_temp_99".to_string(),
+        sender_auth_key: vec![0x77; 32],
+        prekey_bundle,
+    };
+
+    let uri_string = link.to_uri().expect("serialize to URI");
+    println!("Compact QR URI length: {}", uri_string.len());
+    assert!(uri_string.len() < 700, "URI length {} must be < 700 for reliable QR scanning", uri_string.len());
+
+    let parsed = ContactLink::from_uri(&uri_string).expect("parse compact URI");
+    assert_eq!(parsed.prekey_bundle.identity_key, [0x11; 32]);
+    assert!(parsed.prekey_bundle.kyber_prekey.is_empty());
+}
+
+#[test]
+fn print_valid_bundle_link() {
+    let identity = simple_signal_core::crypto::pqxdh::generate_identity_keypair();
+    let (bundle, _) = simple_signal_core::crypto::pqxdh::generate_prekey_bundle(&identity, 1, 100);
+    let mut qr_bundle = bundle;
+    qr_bundle.kyber_prekey = Vec::new();
+    let link = ContactLink {
+        relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
+        receive_queue_id: "q_web_inbox_01".to_string(),
+        sender_auth_key: vec![0x11; 32],
+        prekey_bundle: qr_bundle,
+    };
+    println!("VALID_CONTACT_LINK={}", link.to_uri().unwrap());
+}

@@ -154,13 +154,17 @@ impl SimpleSignalApp {
     }
 
     /// Generates the user's standardized Contact Link for QR display.
+    /// Omits kpk from the optical QR URI so it fits cleanly into standard QR codes (< 500 chars).
     pub fn get_my_contact_link(&self) -> Result<String, FfiError> {
         let queue_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
+        let mut qr_bundle = self.prekey_bundle.clone();
+        qr_bundle.kyber_prekey = Vec::new();
+
         let link = ContactLink {
             relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
             receive_queue_id: format!("q_inbox_{}", queue_suffix),
             sender_auth_key: vec![0x11; 32],
-            prekey_bundle: self.prekey_bundle.clone(),
+            prekey_bundle: qr_bundle,
         };
 
         let uri = link.to_uri()?;

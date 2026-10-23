@@ -37,8 +37,8 @@ impl ContactLink {
         let otpk_hex = hex::encode(self.prekey_bundle.one_time_prekey);
         let kpk_hex = hex::encode(&self.prekey_bundle.kyber_prekey);
 
-        let query = format!(
-            "v=1&relay={}&queue={}&auth={}&ik={}&idhk={}&spkid={}&spk={}&sig={}&otpkid={}&otpk={}&kpk={}",
+        let mut query = format!(
+            "v=1&relay={}&queue={}&auth={}&ik={}&idhk={}&spkid={}&spk={}&sig={}&otpkid={}&otpk={}",
             self.relay_onion,
             self.receive_queue_id,
             auth_hex,
@@ -48,9 +48,12 @@ impl ContactLink {
             spk_hex,
             sig_hex,
             self.prekey_bundle.one_time_prekey_id,
-            otpk_hex,
-            kpk_hex
+            otpk_hex
         );
+
+        if !self.prekey_bundle.kyber_prekey.is_empty() {
+            query.push_str(&format!("&kpk={}", kpk_hex));
+        }
 
         Ok(format!("simplex:/contact#/?{}", query))
     }
@@ -148,11 +151,12 @@ impl ContactLink {
             .try_into()
             .map_err(|_| ContactLinkError::MalformedKey("one-time prekey must be 32 bytes".to_string()))?;
 
-        let kpk_hex = params
-            .get("kpk")
-            .ok_or_else(|| ContactLinkError::MissingField("kpk".to_string()))?;
-        let kyber_prekey = hex::decode(kpk_hex)
-            .map_err(|e| ContactLinkError::MalformedKey(format!("kyber prekey hex: {}", e)))?;
+        let kyber_prekey = if let Some(kpk_hex) = params.get("kpk") {
+            hex::decode(kpk_hex)
+                .map_err(|e| ContactLinkError::MalformedKey(format!("kyber prekey hex: {}", e)))?
+        } else {
+            Vec::new()
+        };
 
         let prekey_bundle = PreKeyBundle {
             identity_key,

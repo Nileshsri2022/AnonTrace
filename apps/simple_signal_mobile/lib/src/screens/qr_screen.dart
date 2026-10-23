@@ -136,11 +136,35 @@ class _QrContactScreenState extends State<QrContactScreen>
                         ),
                       ],
                     ),
-                    child: QrImageView(
-                      data: widget.contactUri,
-                      version: QrVersions.auto,
-                      size: 240.0,
-                    ),
+                    child: widget.contactUri.isEmpty
+                        ? const SizedBox(
+                            width: 240,
+                            height: 240,
+                            child: Center(
+                              child: CircularProgressIndicator(color: Color(0xFF2C6BED)),
+                            ),
+                          )
+                        : QrImageView(
+                            data: widget.contactUri,
+                            version: QrVersions.auto,
+                            size: 240.0,
+                            errorStateBuilder: (cxt, err) {
+                              return SizedBox(
+                                width: 240,
+                                height: 240,
+                                child: Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8.0),
+                                    child: Text(
+                                      "QR rendering error: $err",
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                   ),
                   const SizedBox(height: 20),
                   ElevatedButton.icon(
