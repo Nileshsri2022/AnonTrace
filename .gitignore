@@ -9,3 +9,5 @@
 /usr/
 /package/
 AndroidManifest.xml
+build
+.dart_tool
