@@ -60,7 +60,9 @@ impl From<TorError> for FfiError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSummary {
     pub id: String,
     pub send_queue_uri: String,
@@ -79,7 +81,7 @@ impl From<ConversationRecord> for ConversationSummary {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageSummary {
     pub id: String,
     pub conversation_id: String,

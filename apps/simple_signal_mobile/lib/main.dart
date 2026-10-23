@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'src/ffi/bridge.dart';
+import 'src/ffi/native_bridge.dart';
 import 'src/screens/chat_screen.dart';
 import 'src/screens/lock_screen.dart';
 import 'src/screens/qr_screen.dart';
@@ -37,18 +39,27 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
+  final NativeSimpleSignalBridge _bridge = NativeSimpleSignalBridge();
   bool _isUnlocked = false;
   final List<ConversationSummary> _conversations = [];
   String _myContactLink = '';
 
   Future<void> _unlockApp(String pin) async {
-    // Simulated or FFI unlock call
-    await Future.delayed(const Duration(milliseconds: 300));
-    final randomSuffix = DateTime.now().millisecondsSinceEpoch % 100000;
+    String dbPath = 'anontrace.db';
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      dbPath = '${appDir.path}/anontrace.db';
+    } catch (_) {}
+
+    await _bridge.initApp(dbPath: dbPath, masterPin: pin);
+    final myLink = await _bridge.getMyContactLink();
+    final convs = await _bridge.listConversations();
+
     setState(() {
       _isUnlocked = true;
-      _myContactLink =
-          'simplex:/contact#/?v=1&relay=vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion&queue=q_anon_$randomSuffix';
+      _myContactLink = myLink;
+      _conversations.clear();
+      _conversations.addAll(convs);
     });
   }
 
@@ -58,15 +69,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       MaterialPageRoute(
         builder: (_) => ChatScreen(
           conversation: conv,
-          onFetchMessages: (convId) async => [],
-          onSendMessage: (convId, text) async => MessageSummary(
-            id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
-            conversationId: convId,
-            direction: 'outbound',
-            bodyText: text,
-            timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-            status: 'sent',
-          ),
+          onFetchMessages: (convId) => _bridge.listMessages(convId),
+          onSendMessage: (convId, text) =>
+              _bridge.sendChatMessage(conversationId: convId, text: text),
         ),
       ),
     );
@@ -78,22 +83,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       MaterialPageRoute(
         builder: (_) => QrContactScreen(
           contactUri: _myContactLink,
-          onContactScanned: (uri) {
-            final newConv = ConversationSummary(
-              id: 'conv_partner_${DateTime.now().millisecondsSinceEpoch % 1000}',
-              sendQueueUri: uri,
-              receiveQueueId: 'q_local_${DateTime.now().millisecondsSinceEpoch}',
-              createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-            );
-            setState(() {
-              _conversations.insert(0, newConv);
-            });
-            // Automatically launch into active chat screen with the connected partner!
-            WidgetsBinding.instance.addPostFrameCallback((_) {
+          onContactScanned: (uri) async {
+            try {
+              final newConv = await _bridge.importContactLink(uri);
+              setState(() {
+                _conversations.removeWhere((c) => c.id == newConv.id);
+                _conversations.insert(0, newConv);
+              });
+              // Automatically launch into active chat screen with the connected partner!
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _openConversation(newConv);
+                }
+              });
+            } catch (e) {
               if (mounted) {
-                _openConversation(newConv);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to import contact: $e')),
+                );
               }
-            });
+            }
           },
         ),
       ),
