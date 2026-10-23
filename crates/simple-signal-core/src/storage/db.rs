@@ -333,12 +333,12 @@ impl EncryptedDatabase {
     /// Counts session records for a conversation
     pub fn count_sessions(&self, conversation_id: &str) -> Result<usize, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let count: usize = conn.query_row(
+        let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE conversation_id = ?1;",
             params![conversation_id],
             |row| row.get(0),
         )?;
-        Ok(count)
+        Ok(count as usize)
     }
 
     /// Inserts a message record into `messages`
@@ -362,11 +362,11 @@ impl EncryptedDatabase {
     /// Counts message records for a conversation
     pub fn count_messages(&self, conversation_id: &str) -> Result<usize, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let count: usize = conn.query_row(
+        let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1;",
             params![conversation_id],
             |row| row.get(0),
         )?;
-        Ok(count)
+        Ok(count as usize)
     }
 }
