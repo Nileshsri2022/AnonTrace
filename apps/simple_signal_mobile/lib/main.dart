@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'src/ffi/bridge.dart';
-import 'src/ffi/native_bridge.dart';
+import 'src/ffi/bridge_factory.dart';
 import 'src/screens/chat_screen.dart';
 import 'src/screens/lock_screen.dart';
 import 'src/screens/qr_screen.dart';
@@ -39,7 +39,7 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  final NativeSimpleSignalBridge _bridge = NativeSimpleSignalBridge();
+  final SimpleSignalBridge _bridge = createSignalBridge();
   bool _isUnlocked = false;
   final List<ConversationSummary> _conversations = [];
   String _myContactLink = '';
