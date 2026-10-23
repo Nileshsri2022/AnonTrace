@@ -273,12 +273,17 @@ impl EncryptedDatabase {
         Ok(tables)
     }
 
-    /// Inserts a conversation record into `conversations`
+    /// Inserts or updates a conversation record in `conversations` idempotently
     pub fn insert_conversation(&self, record: &ConversationRecord) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO conversations (id, send_queue_uri, receive_queue_id, relay_onion_address, sender_auth_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 send_queue_uri = excluded.send_queue_uri,
+                 receive_queue_id = excluded.receive_queue_id,
+                 relay_onion_address = excluded.relay_onion_address,
+                 sender_auth_key = excluded.sender_auth_key;",
             params![
                 record.id,
                 record.send_queue_uri,
@@ -328,6 +333,26 @@ impl EncryptedDatabase {
             params![record.conversation_id, record.session_record, record.updated_at],
         )?;
         Ok(())
+    }
+
+    /// Retrieves the latest session record for a conversation
+    pub fn get_latest_session(&self, conversation_id: &str) -> Result<Option<SessionRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, session_record, updated_at
+             FROM sessions WHERE conversation_id = ?1
+             ORDER BY updated_at DESC, id DESC LIMIT 1;",
+        )?;
+        let mut rows = stmt.query(params![conversation_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(SessionRecord {
+                conversation_id: row.get(0)?,
+                session_record: row.get(1)?,
+                updated_at: row.get(2)?,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Counts session records for a conversation

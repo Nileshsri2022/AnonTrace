@@ -66,9 +66,13 @@ class _QrContactScreenState extends State<QrContactScreen>
     super.dispose();
   }
 
+  bool _isHandlingScan = false;
+
   void _submitLink(String link) {
+    if (_isHandlingScan) return;
     final trimmed = link.trim();
     if (trimmed.isNotEmpty) {
+      _isHandlingScan = true;
       _scannerController.stop();
       widget.onContactScanned(trimmed);
       Navigator.pop(context);

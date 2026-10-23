@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../logging/app_logger.dart';
 import 'bridge.dart';
 
 SimpleSignalBridge getPlatformBridge() => WebSimpleSignalBridge();
@@ -10,6 +11,7 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<void> initApp({required String dbPath, required String masterPin}) async {
+    AppLogger.info('WEB_BRIDGE', 'Initializing web in-memory bridge (sandboxed)');
     await Future.delayed(const Duration(milliseconds: 100));
     final randomSuffix = DateTime.now().millisecondsSinceEpoch % 100000;
     _contactLink =
@@ -18,11 +20,13 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<String> getMyContactLink() async {
+    AppLogger.info('WEB_BRIDGE', 'getMyContactLink requested');
     return _contactLink;
   }
 
   @override
   Future<ConversationSummary> importContactLink(String uri) async {
+    AppLogger.info('WEB_BRIDGE', 'importContactLink: $uri');
     final newConv = ConversationSummary(
       id: 'conv_web_${DateTime.now().millisecondsSinceEpoch % 1000}',
       sendQueueUri: uri,
@@ -38,6 +42,7 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
     required String conversationId,
     required String text,
   }) async {
+    AppLogger.info('WEB_BRIDGE', 'sendChatMessage to $conversationId');
     final msg = MessageSummary(
       id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
       conversationId: conversationId,
@@ -64,5 +69,5 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   Future<void> setDormant(bool dormant) async {}
 
   @override
-  Future<bool> isActive() async => true;
+  Future<bool> isActive() async => false;
 }

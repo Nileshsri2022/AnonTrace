@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
+import '../logging/app_logger.dart';
 import 'bridge.dart';
 
 SimpleSignalBridge getPlatformBridge() => NativeSimpleSignalBridge();
@@ -68,10 +69,12 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
         _isNativeLoaded = true;
+        AppLogger.ffi('DynamicLibrary.open', 'libsimple_signal_core native library linked successfully');
       }
-    } catch (_) {
+    } catch (e) {
       // DynamicLibrary load failed or running in non-native environment; fallback gracefully
       _isNativeLoaded = false;
+      AppLogger.warning('FFI', 'Native library load failed, using fallback engine: $e');
     }
   }
 
@@ -88,6 +91,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<void> initApp({required String dbPath, required String masterPin}) async {
+    AppLogger.ffi('simple_signal_init', 'Starting crypto session at $dbPath (Native: $_isNativeLoaded)');
     if (_isNativeLoaded && _initFn != null) {
       final cDbPath = dbPath.toNativeUtf8();
       final cPin = masterPin.toNativeUtf8();
@@ -112,6 +116,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<String> getMyContactLink() async {
+    AppLogger.ffi('simple_signal_get_contact_link', 'Requesting identity public contact URI');
     if (_isNativeLoaded && _getLinkFn != null) {
       final resPtr = _getLinkFn!();
       final json = _parseAndFree(resPtr);
@@ -125,6 +130,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<ConversationSummary> importContactLink(String uri) async {
+    AppLogger.ffi('simple_signal_import_contact_link', 'Importing contact link: $uri');
     if (_isNativeLoaded && _importLinkFn != null) {
       final cUri = uri.toNativeUtf8();
       try {
@@ -151,6 +157,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<MessageSummary> sendChatMessage({required String conversationId, required String text}) async {
+    AppLogger.ffi('simple_signal_send_message', 'Outbound message for conv: $conversationId');
     if (_isNativeLoaded && _sendMessageFn != null) {
       final cConvId = conversationId.toNativeUtf8();
       final cText = text.toNativeUtf8();

@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'src/ffi/bridge.dart';
 import 'src/ffi/bridge_factory.dart';
+import 'src/logging/app_logger.dart';
 import 'src/screens/chat_screen.dart';
+import 'src/screens/debug_log_screen.dart';
 import 'src/screens/lock_screen.dart';
 import 'src/screens/qr_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLogger.initErrorHooks();
+  AppLogger.info('BOOT', 'AnonTrace mobile client initialized with zero-knowledge logging');
   runApp(const SimpleSignalAppWidget());
 }
 
@@ -45,25 +49,33 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   String _myContactLink = '';
 
   Future<void> _unlockApp(String pin) async {
+    AppLogger.info('AUTH', 'Unlocking app with user PIN: $pin');
     String dbPath = 'anontrace.db';
     try {
       final appDir = await getApplicationDocumentsDirectory();
       dbPath = '${appDir.path}/anontrace.db';
     } catch (_) {}
 
-    await _bridge.initApp(dbPath: dbPath, masterPin: pin);
-    final myLink = await _bridge.getMyContactLink();
-    final convs = await _bridge.listConversations();
+    try {
+      await _bridge.initApp(dbPath: dbPath, masterPin: pin);
+      final myLink = await _bridge.getMyContactLink();
+      final convs = await _bridge.listConversations();
 
-    setState(() {
-      _isUnlocked = true;
-      _myContactLink = myLink;
-      _conversations.clear();
-      _conversations.addAll(convs);
-    });
+      setState(() {
+        _isUnlocked = true;
+        _myContactLink = myLink;
+        _conversations.clear();
+        _conversations.addAll(convs);
+      });
+      AppLogger.info('AUTH', 'App successfully unlocked. Loaded ${convs.length} conversation(s).');
+    } catch (e, st) {
+      AppLogger.error('AUTH', 'Unlock failed: $e', e, st);
+      rethrow;
+    }
   }
 
   void _openConversation(ConversationSummary conv) {
+    AppLogger.info('CHAT', 'Opening conversation: ${conv.id}');
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -85,6 +97,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           contactUri: _myContactLink,
           onContactScanned: (uri) async {
             try {
+              AppLogger.info('PEER', 'Scanned QR contact link: $uri');
               final newConv = await _bridge.importContactLink(uri);
               setState(() {
                 _conversations.removeWhere((c) => c.id == newConv.id);
@@ -96,7 +109,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   _openConversation(newConv);
                 }
               });
-            } catch (e) {
+            } catch (e, st) {
+              AppLogger.error('PEER', 'Failed to import contact: $e', e, st);
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Failed to import contact: $e')),
@@ -142,6 +156,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ],
         ),
         actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.receipt_long_rounded, size: 16, color: Colors.tealAccent),
+            label: const Text('View Debug Logs', style: TextStyle(color: Colors.tealAccent)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DebugLogScreen()),
+              );
+            },
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Close', style: TextStyle(color: Color(0xFF2C6BED))),
@@ -202,6 +227,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.receipt_long_rounded, color: Colors.white70),
+            tooltip: 'Diagnostic Logs',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DebugLogScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.info_outline_rounded, color: Colors.white70),
             tooltip: 'Security Status',

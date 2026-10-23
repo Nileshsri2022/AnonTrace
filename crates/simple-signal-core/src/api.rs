@@ -15,7 +15,7 @@ use crate::crypto::ratchet::DoubleRatchetSession;
 use crate::net::tor::{DormancyMode, TorClientManager, TorError};
 use crate::storage::db::{
     derive_key, ConversationRecord, EncryptedDatabase, KeyDerivationParams, MessageRecord,
-    StorageError,
+    SessionRecord, StorageError,
 };
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -143,13 +143,25 @@ impl SimpleSignalApp {
 
         let tor_manager = TorClientManager::default_client();
 
+        // Restore active sessions from encrypted SQLite storage for all known conversations
+        let mut active_sessions = HashMap::new();
+        if let Ok(convs) = db.list_conversations() {
+            for conv in convs {
+                if let Ok(Some(session_rec)) = db.get_latest_session(&conv.id) {
+                    if let Ok(session) = DoubleRatchetSession::from_bytes(&session_rec.session_record) {
+                        active_sessions.insert(conv.id, session);
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             db: Arc::new(db),
             tor_manager,
             identity: Arc::new(identity),
             _prekey_secrets: Arc::new(secrets),
             prekey_bundle: bundle,
-            active_sessions: Arc::new(Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(Mutex::new(active_sessions)),
         })
     }
 
@@ -224,6 +236,16 @@ impl SimpleSignalApp {
         text: &str,
     ) -> Result<MessageSummary, FfiError> {
         let mut sessions = self.active_sessions.lock().unwrap();
+
+        // If session not currently active in memory, attempt to restore from encrypted SQLite storage
+        if !sessions.contains_key(conversation_id) {
+            if let Some(session_rec) = self.db.get_latest_session(conversation_id)? {
+                let restored = DoubleRatchetSession::from_bytes(&session_rec.session_record)
+                    .map_err(|e| FfiError::CryptoError(e.to_string()))?;
+                sessions.insert(conversation_id.to_string(), restored);
+            }
+        }
+
         let session = sessions
             .get_mut(conversation_id)
             .ok_or_else(|| FfiError::NotFound("Active session not found".to_string()))?;
@@ -240,6 +262,16 @@ impl SimpleSignalApp {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
+
+        // Persist updated ratchet state so forward secrecy and ratchet step survive app restarts
+        let updated_bytes = session
+            .to_bytes()
+            .map_err(|e| FfiError::CryptoError(e.to_string()))?;
+        self.db.insert_session(&SessionRecord {
+            conversation_id: conversation_id.to_string(),
+            session_record: updated_bytes,
+            updated_at: now,
+        })?;
 
         let msg_id = format!("msg_{}", nanos);
         let record = MessageRecord {

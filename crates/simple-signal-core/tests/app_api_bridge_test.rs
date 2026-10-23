@@ -74,3 +74,41 @@ fn test_app_api_contact_exchange_and_messaging_flow() {
     bob_app.set_dormant(false).expect("set dormant false");
     assert_eq!(bob_app.is_active(), true);
 }
+
+#[test]
+fn test_reimporting_contact_is_idempotent_and_session_survives_restart() {
+    let dir = tempdir().expect("tempdir");
+    let alice_db = dir.path().join("alice.db");
+    let bob_db = dir.path().join("bob.db");
+
+    let alice_app =
+        SimpleSignalApp::init(alice_db.to_str().unwrap(), "alice_pin_1111").expect("alice init");
+    let bob_app =
+        SimpleSignalApp::init(bob_db.to_str().unwrap(), "bob_pin_2222").expect("bob init");
+
+    let alice_link_uri = alice_app.get_my_contact_link().expect("alice contact link");
+
+    // 1. Bob imports Alice's link
+    let conv1 = bob_app.import_contact_link(&alice_link_uri).expect("first import");
+
+    // 2. Bob imports Alice's link AGAIN (simulating duplicate camera scan or re-scan)
+    // BEFORE FIX: Fails with "UNIQUE constraint failed: conversations.id"
+    let conv2 = bob_app
+        .import_contact_link(&alice_link_uri)
+        .expect("second import should be idempotent");
+    assert_eq!(conv1.id, conv2.id);
+
+    // 3. Drop bob_app (simulating app process kill or restart)
+    drop(bob_app);
+
+    // 4. Bob reopens app with PIN
+    let reopened_bob =
+        SimpleSignalApp::init(bob_db.to_str().unwrap(), "bob_pin_2222").expect("bob reopen");
+
+    // 5. Bob sends message to Alice's conversation
+    // BEFORE FIX: Fails with "Item not found: Active session not found"
+    let msg = reopened_bob
+        .send_chat_message(&conv1.id, "Hello after app restart!")
+        .expect("send after restart");
+    assert_eq!(msg.body_text, "Hello after app restart!");
+}
