@@ -14,8 +14,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Repository with Tags
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Tag Message for Release Body
+        id: extract_tag
+        run: |
+          # Extract the exact message provided during tagging (e.g. git tag -a v1.0.0 -m "My Message")
+          MSG=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
+          if [ -z "$MSG" ]; then
+            MSG=$(git log -1 --pretty=%B)
+          fi
+          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
+          echo "$MSG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -53,11 +67,6 @@ jobs:
           draft: false
           prerelease: false
           files: apps/simple_signal_mobile/build/app/outputs/flutter-apk/*.apk
-          body: |
-            ### Simple+Signal Anonymous Messaging (${{ github.ref_name }})
-            - **Post-Quantum Cryptography:** NIST FIPS 203 ML-KEM-1024 + Signal Double Ratchet
-            - **Routing:** Unidirectional pairwise queues over Tor v3 Onion Relays
-            - **Storage:** Local encrypted SQLite with Argon2id master key derivation
-            - **Direct Download:** Download and install the `.apk` file below on any Android device.
+          body: ${{ env.RELEASE_BODY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
