@@ -1,4 +1,3 @@
-
 name: Build & Release Android APK
 
 on:
@@ -34,18 +33,15 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        shell: bash
+      - name: Locate Android NDK
         run: |
-          set -euo pipefail
-
-          sdkmanager --install "ndk;27.2.12479018"
-
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" \
-            >> "$GITHUB_ENV"
+          NDK_DIR=$(find $ANDROID_HOME/ndk -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_DIR" ]; then
+            echo "::error::No Android NDK found in $ANDROID_HOME/ndk"
+            exit 1
+          fi
+          echo "Using Android NDK: $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Rust and Android Targets
         uses: dtolnay/rust-toolchain@stable
