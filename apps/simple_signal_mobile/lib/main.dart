@@ -44,10 +44,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Future<void> _unlockApp(String pin) async {
     // Simulated or FFI unlock call
     await Future.delayed(const Duration(milliseconds: 300));
+    final randomSuffix = DateTime.now().millisecondsSinceEpoch % 100000;
     setState(() {
       _isUnlocked = true;
       _myContactLink =
-          'simplex:/contact#/?v=1&relay=vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion&queue=q_alice_temp_99';
+          'simplex:/contact#/?v=1&relay=vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion&queue=q_anon_$randomSuffix';
     });
   }
 
@@ -78,16 +79,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         builder: (_) => QrContactScreen(
           contactUri: _myContactLink,
           onContactScanned: (uri) {
+            final newConv = ConversationSummary(
+              id: 'conv_partner_${DateTime.now().millisecondsSinceEpoch % 1000}',
+              sendQueueUri: uri,
+              receiveQueueId: 'q_local_${DateTime.now().millisecondsSinceEpoch}',
+              createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            );
             setState(() {
-              _conversations.insert(
-                0,
-                ConversationSummary(
-                  id: 'conv_partner_${DateTime.now().millisecondsSinceEpoch % 1000}',
-                  sendQueueUri: uri,
-                  receiveQueueId: 'q_local_${DateTime.now().millisecondsSinceEpoch}',
-                  createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                ),
-              );
+              _conversations.insert(0, newConv);
+            });
+            // Automatically launch into active chat screen with the connected partner!
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                _openConversation(newConv);
+              }
             });
           },
         ),
