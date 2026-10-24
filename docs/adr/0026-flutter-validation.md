@@ -1,7 +1,8 @@
 # ADR-0026: Flutter Validation — PR Checks, Not Tag-Only Checks
 
 ## Status
-Accepted (Workflow + Issue 29 implemented locally 2026-10-24;
+Accepted (Issue 29 + workflow WRITTEN locally 2026-10-24;
+workflow NOT pushed — GitHub API 403, see Issue 29 §1b;
 local analyze NOT finished, see Issue 29 §3)
 
 ## Context

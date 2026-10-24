@@ -2,9 +2,9 @@
 
 | Property | Value |
 | :--- | :--- |
-| **Status** | Partially implemented 2026-10-24 — PR checks workflow added; LOCAL analyze NOT finished (see §3); device measurement NOT done |
+| **Status** | Partially implemented 2026-10-24 — PR checks workflow WRITTEN but NOT pushed (GitHub API 403, see §1b); LOCAL analyze NOT finished (see §3); device measurement NOT done |
 | **Type** | Validation infrastructure + honest status record |
-| **Target** | `.github/workflows/pr-checks.yml` (new) |
+| **Target** | `.github/workflows/pr-checks.yml` (written locally, pending manual add — see §1b) |
 | **Related ADR** | `docs/adr/0026-flutter-validation.md` |
 | **Out of scope** | Relay deployment (Issue 28), device tests (Issue 30), release APK signing (Phase 0 follow-up) |
 
@@ -14,10 +14,26 @@
 
 `build-apk.yml` already runs Rust tests + Flutter tests, but only on
 `v*` tags and manual dispatch. A PR could merge with broken Dart
-code and nothing would check it. The new `pr-checks.yml` runs on
-every PR to `main`: `cargo test --locked`, `flutter analyze`, and
-`flutter test`. From now on, a PR with an analyze error fails its
-own checks instead of being discovered at release time.
+code and nothing would check it. The new `pr-checks.yml` (written
+in this branch's working tree) runs on every PR to `main`:
+`cargo test --locked`, `flutter analyze`, and `flutter test`.
+From now on, a PR with an analyze error fails its own checks
+instead of being discovered at release time.
+
+## 1b. Workflow file could NOT be pushed via the GitHub API
+
+Pushing `.github/workflows/pr-checks.yml` through the connector
+failed with `403 Resource not accessible by integration`, while
+the docs in the same branch pushed fine. That is the GitHub App
+lacking the `workflows` permission for this repo — workflow files
+are a protected path via the API. **Operator step to complete
+this PR:** add `.github/workflows/pr-checks.yml` manually (GitHub
+web UI → Add file, or a local `git` push from a machine with
+write access) using the file as written in the author's working
+tree. Its content is short and is also quoted in the PR body.
+Until that file lands, this PR is docs-only and the automatic
+PR checks do not exist yet — do not mistake this PR for the
+workflow itself.
 
 ## 2. What this PR does NOT claim
 
