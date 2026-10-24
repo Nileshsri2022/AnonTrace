@@ -1,0 +1,6 @@
+# Replace relay.anontrace.app with your domain. Caddy obtains and
+# renews the Let's Encrypt certificate automatically. Do not change
+# the upstream: the relay binds loopback only, by design.
+relay.anontrace.app {
+	reverse_proxy 127.0.0.1:8080
+}

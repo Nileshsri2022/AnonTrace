@@ -19,7 +19,7 @@ cargo run -p anontrace-relay -- 8080
 
 ## Deploy (operator decision, not code)
 
-This binary speaks plain HTTP on loopback. Put TLS on port 443 in
+This binary speaks plain HTTP on loopback. See deploy/README.md for the no-Docker deployment package (systemd + Caddy + Tor).
 front of it with a reverse proxy (nginx/Caddy) and point clients at
 that HTTPS URL. Optionally expose an onion address for Stealth Mode.
 Do not expose the relay's plain HTTP port to the internet.

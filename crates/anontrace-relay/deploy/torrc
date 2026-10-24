@@ -1,0 +1,5 @@
+# Append to /etc/tor/torrc, then: sudo systemctl restart tor
+# The onion address appears in /var/lib/tor/anontrace-relay/hostname.
+# It fronts the SAME relay listener as Caddy (127.0.0.1:8080).
+HiddenServiceDir /var/lib/tor/anontrace-relay/
+HiddenServicePort 80 127.0.0.1:8080
