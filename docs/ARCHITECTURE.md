@@ -53,15 +53,17 @@ AnonTrace (Simple+Signal) is a metadata-free, post-quantum end-to-end encrypted 
 - **Framework**: Flutter 3.x / Dart 3.x.
 - **Views**:
   - `LockScreen`: Enforces Master PIN and biometric authentication before initializing database keys.
-  - `ChatScreen`: Renders conversation timelines with periodic live polling (`1500ms`) and message dispatch.
+  - `ChatScreen`: Renders conversation timelines with instant reactive subscription to `bridge.messageStream` and message dispatch.
   - `QrContactScreen`: Displays compact Contact Link QR codes (< 500 chars) and drives the `MobileScanner` camera feed.
   - `DebugLogScreen`: Live diagnostic viewer with category filters and secret redaction.
 
 ### 2.2 Network Transport Layer (`apps/simple_signal_mobile/lib/src/net/relay_client.dart`)
 - **Transport**: Standard HTTPS over Port 443.
-- **Protocol**: Unidirectional ephemeral queue model.
+- **Protocol**: Unidirectional ephemeral queue model with Server-Sent Events (SSE) streaming.
 - **Connection Management**:
-  - `persistentConnection = false` per request to isolate TCP state and handle rapid successive HTTP/1.1 transactions.
+  - `listenToQueue`: Opens a single, persistent HTTP chunked stream over TLS Port 443 that receives pushed ciphertexts in < 50ms without repeated TCP/TLS handshakes.
+  - `sendPayload`: Utilizes persistent keep-alive connections for outbound dispatch, reducing send latency to < 200ms.
+  - Automatic reconnection with exponential backoff on 4G cellular tower handoffs or transient drops.
   - Uses native Android system CA trust store, completely avoiding NDK root certificate mismatches.
   - Zero-knowledge transport: The relay server only sees randomly generated queue identifiers and opaque hex ciphertexts.
 

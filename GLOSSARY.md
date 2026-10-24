@@ -43,3 +43,11 @@ _Avoid_: Cleartext packet, raw message, chat payload
 **Privacy-Scrubbed Logger**:
 An in-memory rolling diagnostic ring buffer with automated regex redaction of PINs, cryptographic keys, and tokens, maintaining observability without persistent storage exposure.
 _Avoid_: System crash log, disk log, debug dump
+
+**SSE Queue Stream**:
+A persistent, read-only HTTP chunked connection opened over TLS Port 443 to a unidirectional inbox queue, delivering pushed ciphertexts instantly without repeated TCP/TLS handshakes.
+_Avoid_: Polling loop, web socket, long poll
+
+**Unified Message Stream**:
+An in-memory broadcast stream within the application layer that dispatches newly decrypted messages simultaneously to conversation lists, notifications, and active chat views, eliminating polling race conditions.
+_Avoid_: Database polling, screen refresh loop
