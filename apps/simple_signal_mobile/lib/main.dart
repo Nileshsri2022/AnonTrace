@@ -53,6 +53,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   Timer? _inboxSyncTimer;
   Timer? _backgroundPollTimer;
   StreamSubscription<MessageSummary>? _messageStreamSub;
+  StreamSubscription? _foregroundTickSub;
 
   @override
   void initState() {
@@ -61,7 +62,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     // Step 4: foreground-service ticks arrive here. The background
     // isolate never touches the relay itself (no PIN there); the
     // main isolate polls with the already-unlocked bridge.
-    FlutterForegroundTask.addTaskDataCallback((data) {
+    // v6 API (6.5.0): no addTaskDataCallback exists. The main
+    // isolate registers a ReceivePort (before the service starts)
+    // and the background handler sends ticks to its SendPort.
+    _foregroundTickSub =
+        FlutterForegroundTask.receivePort?.listen((data) {
       if (data is Map && data['type'] == 'poll_tick') {
         _pollFromForegroundTick();
       }
@@ -120,6 +125,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     _inboxSyncTimer?.cancel();
     _backgroundPollTimer?.cancel();
     _messageStreamSub?.cancel();
+    _foregroundTickSub?.cancel();
     // Do not await here (dispose is sync); stopping is best-effort.
     AnonTraceForegroundService.stop();
     super.dispose();

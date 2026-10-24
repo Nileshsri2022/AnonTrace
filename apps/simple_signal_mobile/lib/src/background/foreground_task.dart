@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -35,20 +36,27 @@ void startForegroundCallback() {
 }
 
 class AnonTraceTaskHandler extends TaskHandler {
+  // v6 API (flutter_foreground_task 6.5.0, verified against the
+  // installed package source): handlers receive the main isolate's
+  // SendPort as a parameter. There is no TaskStarter, no
+  // sendDataToMain, and no addTaskDataCallback in 6.5.0 — the
+  // original code used those names from memory and failed analyze.
   @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+  void onStart(DateTime timestamp, SendPort? sendPort) {
     // Nothing to initialise here: no PIN, no Rust core, no relay
     // client in this isolate, by design (see the header comment).
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
+  void onRepeatEvent(DateTime timestamp, SendPort? sendPort) {
     // Tick the main isolate; it does the actual relay poll.
-    FlutterForegroundTask.sendDataToMain({'type': 'poll_tick'});
+    // sendPort is null if the main isolate has not registered its
+    // ReceivePort yet — then the tick is simply dropped.
+    sendPort?.send({'type': 'poll_tick'});
   }
 
   @override
-  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+  void onDestroy(DateTime timestamp, SendPort? sendPort) {}
 
   @override
   void onNotificationButtonPressed(String id) {}
