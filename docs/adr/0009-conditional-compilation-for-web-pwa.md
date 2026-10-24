@@ -1,0 +1,3 @@
+# Conditional Bridge Factory for Flutter Web PWA and Native Targets
+
+We decided to decouple native dynamic library loading from Web PWA execution using Dart conditional imports (`bridge_ffi.dart` vs `bridge_stub.dart` behind `bridge.dart`). Compiling Flutter applications targeting Web browsers (e.g. Vercel deployment) fails immediately if `dart:ffi` is referenced unconditionally in the import graph, because the JavaScript runtime does not support C FFI pointers. A conditional bridge factory allows AnonTrace to run as a zero-install browser PWA using an in-memory sandboxed cryptographic engine, while native mobile and desktop targets seamlessly leverage the compiled multi-architecture Rust native library (`libsimple_signal_core.so`).
