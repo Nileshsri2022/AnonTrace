@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -54,6 +55,12 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   final RelayClient _relayClient = RelayClient();
   String? _myInboxQueueId;
   String? _lastSinceId;
+
+  final StreamController<MessageSummary> _messageStreamController = StreamController<MessageSummary>.broadcast();
+  StreamSubscription<RelayMessage>? _queueSubscription;
+
+  @override
+  Stream<MessageSummary> get messageStream => _messageStreamController.stream;
 
   bool _isNativeLoaded = false;
   final List<ConversationSummary> _fallbackConversations = [];
@@ -127,6 +134,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
           if (qJson['success'] == true && qJson['queue_id'] != null) {
             _myInboxQueueId = qJson['queue_id'] as String;
             AppLogger.info('Relay', 'Local inbox queue initialized: $_myInboxQueueId');
+            _startInboxStream();
           }
         }
       } finally {
@@ -142,14 +150,50 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
     }
   }
 
+  void _startInboxStream() {
+    _queueSubscription?.cancel();
+    if (_myInboxQueueId == null || !_isNativeLoaded || _processPayloadFn == null) return;
+
+    AppLogger.info('Relay', 'Connecting persistent SSE stream to inbox queue: $_myInboxQueueId');
+    _queueSubscription = _relayClient
+        .listenToQueue(queueId: _myInboxQueueId!, sinceId: _lastSinceId)
+        .listen((rMsg) {
+      _lastSinceId = rMsg.id;
+      if (rMsg.payloadHex.isNotEmpty && _processPayloadFn != null) {
+        final cHex = rMsg.payloadHex.toNativeUtf8();
+        try {
+          final procPtr = _processPayloadFn!(cHex);
+          final procJson = _parseAndFree(procPtr);
+          if (procJson['success'] == true && procJson['message'] != null) {
+            final msg = MessageSummary.fromJson(procJson['message'] as Map<String, dynamic>);
+            AppLogger.info('Relay', 'Received real-time message via SSE stream for conv: ${msg.conversationId}');
+            _messageStreamController.add(msg);
+          } else if (procJson['success'] == true) {
+            AppLogger.info('Relay', 'Processed incoming handshake frame via SSE stream');
+          }
+        } catch (e) {
+          AppLogger.warning('Relay', 'Error processing streamed payload: $e');
+        } finally {
+          calloc.free(cHex);
+        }
+      }
+    }, onError: (e) {
+      AppLogger.warning('Relay', 'SSE inbox stream error: $e');
+    });
+  }
+
   @override
   Future<String?> getMyInboxQueueId() async {
-    if (_myInboxQueueId != null) return _myInboxQueueId;
+    if (_myInboxQueueId != null) {
+      if (_queueSubscription == null) _startInboxStream();
+      return _myInboxQueueId;
+    }
     if (_isNativeLoaded && _getQueueFn != null) {
       final qPtr = _getQueueFn!();
       final qJson = _parseAndFree(qPtr);
       if (qJson['success'] == true && qJson['queue_id'] != null) {
         _myInboxQueueId = qJson['queue_id'] as String;
+        _startInboxStream();
       }
     }
     return _myInboxQueueId;
@@ -305,6 +349,9 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
 
       if (_myInboxQueueId != null) {
+        if (_queueSubscription == null) {
+          _startInboxStream();
+        }
         try {
           final relayMessages = await _relayClient.pollQueue(
             queueId: _myInboxQueueId!,
@@ -319,6 +366,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
                 final procJson = _parseAndFree(procPtr);
                 if (procJson['success'] == true && procJson['message'] != null) {
                   final msg = MessageSummary.fromJson(procJson['message'] as Map<String, dynamic>);
+                  _messageStreamController.add(msg);
                   if (conversationId == null || conversationId.isEmpty || msg.conversationId == conversationId) {
                     newlyReceived.add(msg);
                   }
@@ -346,6 +394,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
             final msg = MessageSummary.fromJson(item as Map<String, dynamic>);
             if (!newlyReceived.any((m) => m.id == msg.id)) {
               newlyReceived.add(msg);
+              _messageStreamController.add(msg);
             }
           }
         }

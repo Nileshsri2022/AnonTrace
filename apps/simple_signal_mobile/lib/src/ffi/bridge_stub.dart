@@ -5,9 +5,13 @@ import 'bridge.dart';
 SimpleSignalBridge getPlatformBridge() => WebSimpleSignalBridge();
 
 class WebSimpleSignalBridge implements SimpleSignalBridge {
+  final StreamController<MessageSummary> _stubStreamController = StreamController<MessageSummary>.broadcast();
   final List<ConversationSummary> _conversations = [];
   final Map<String, List<MessageSummary>> _messages = {};
   String _contactLink = '';
+
+  @override
+  Stream<MessageSummary> get messageStream => _stubStreamController.stream;
 
   @override
   Future<void> initApp({required String dbPath, required String masterPin}) async {

@@ -49,16 +49,35 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final List<ConversationSummary> _conversations = [];
   String _myContactLink = '';
   Timer? _inboxSyncTimer;
+  StreamSubscription<MessageSummary>? _messageStreamSub;
 
   @override
   void dispose() {
     _inboxSyncTimer?.cancel();
+    _messageStreamSub?.cancel();
     super.dispose();
   }
 
   void _startInboxSync() {
     _inboxSyncTimer?.cancel();
-    _inboxSyncTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+    _messageStreamSub?.cancel();
+
+    // 1. Reactive stream subscription: Updates conversation list instantly (< 50ms) upon message arrival
+    _messageStreamSub = _bridge.messageStream.listen((_) async {
+      if (!_isUnlocked || !mounted) return;
+      try {
+        final updatedConvs = await _bridge.listConversations();
+        if (mounted) {
+          setState(() {
+            _conversations.clear();
+            _conversations.addAll(updatedConvs);
+          });
+        }
+      } catch (_) {}
+    });
+
+    // 2. Low-frequency safety poll (5 seconds) to catch edge-case syncs or offline reconnects
+    _inboxSyncTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_isUnlocked || !mounted) return;
       try {
         final newMsgs = await _bridge.receiveMessages();
@@ -107,6 +126,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       MaterialPageRoute(
         builder: (_) => ChatScreen(
           conversation: conv,
+          messageStream: _bridge.messageStream,
           onFetchMessages: (convId) => _bridge.listMessages(convId),
           onSendMessage: (convId, text) =>
               _bridge.sendChatMessage(conversationId: convId, text: text),

@@ -7,6 +7,7 @@ class ChatScreen extends StatefulWidget {
   final Future<List<MessageSummary>> Function(String convId) onFetchMessages;
   final Future<MessageSummary> Function(String convId, String text) onSendMessage;
   final Future<List<MessageSummary>> Function(String convId)? onPollMessages;
+  final Stream<MessageSummary>? messageStream;
 
   const ChatScreen({
     Key? key,
@@ -14,6 +15,7 @@ class ChatScreen extends StatefulWidget {
     required this.onFetchMessages,
     required this.onSendMessage,
     this.onPollMessages,
+    this.messageStream,
   }) : super(key: key);
 
   @override
@@ -25,33 +27,51 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<MessageSummary> _messages = [];
   bool _isLoading = true;
   Timer? _pollTimer;
+  StreamSubscription<MessageSummary>? _streamSub;
 
   @override
   void initState() {
     super.initState();
     _loadMessages();
+    _subscribeToStream();
     _startPolling();
   }
 
   @override
   void dispose() {
+    _streamSub?.cancel();
     _pollTimer?.cancel();
     _msgController.dispose();
     super.dispose();
   }
 
-  void _startPolling() {
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
-      if (!mounted || widget.onPollMessages == null) return;
-      try {
-        final incoming = await widget.onPollMessages!(widget.conversation.id);
-        if (incoming.isNotEmpty && mounted) {
+  void _subscribeToStream() {
+    if (widget.messageStream != null) {
+      _streamSub = widget.messageStream!.listen((msg) {
+        if (msg.conversationId == widget.conversation.id && mounted) {
           setState(() {
-            for (final msg in incoming) {
-              if (!_messages.any((m) => m.id == msg.id)) {
-                _messages.add(msg);
-              }
+            if (!_messages.any((m) => m.id == msg.id)) {
+              _messages.add(msg);
             }
+          });
+        }
+      });
+    }
+  }
+
+  void _startPolling() {
+    // Passive backup poll every 3 seconds to catch any messages saved while offline
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!mounted) return;
+      try {
+        if (widget.onPollMessages != null) {
+          await widget.onPollMessages!(widget.conversation.id);
+        }
+        final msgs = await widget.onFetchMessages(widget.conversation.id);
+        if (mounted && msgs.length != _messages.length) {
+          setState(() {
+            _messages.clear();
+            _messages.addAll(msgs);
           });
         }
       } catch (_) {}

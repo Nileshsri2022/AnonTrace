@@ -53,6 +53,7 @@ class MessageSummary {
 }
 
 abstract class SimpleSignalBridge {
+  Stream<MessageSummary> get messageStream;
   Future<void> initApp({required String dbPath, required String masterPin});
   Future<String> getMyContactLink();
   Future<String?> getMyInboxQueueId();
