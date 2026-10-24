@@ -1,0 +1,3 @@
+# Compact Optical QR Contact Link with Over-the-Wire Kyber Prekey Exchange
+
+We decided to omit the bulky ML-KEM-1024 post-quantum public prekey (KPK, ~1568 bytes) from the optical QR code Contact Link URI and instead exchange it over-the-wire during initial handshake establishment. Embedding the full ML-KEM-1024 public key directly into the QR code generates extremely dense, high-version QR matrices that consumer smartphone cameras and standard camera sensors fail to scan or focus on in suboptimal lighting. Trimming the optical QR payload down to identity and signed prekey components brings URI length under 500 characters, ensuring instantaneous optical camera scanning while maintaining full post-quantum security upon first handshake exchange.

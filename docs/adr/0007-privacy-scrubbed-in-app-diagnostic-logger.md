@@ -1,0 +1,3 @@
+# Privacy-Scrubbed In-Memory Diagnostic Logging
+
+We decided to implement a zero-disk, rolling 500-entry in-memory ring buffer for application diagnostics, equipped with strict regex-based automated scrubbing for master PINs, cryptographic secret keys, authorization tokens, and private contact link parameters. Writing logs to unencrypted persistent device storage exposes sensitive metadata and keying material to forensic extraction; completely suppressing diagnostic output leaves users and developers blind when debugging networking, Tor consensus, or FFI library loading issues on physical devices. A volatile, redacted in-memory buffer balances operational observability with absolute privacy.

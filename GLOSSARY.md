@@ -27,3 +27,19 @@ _Avoid_: Server, broker host, proxy, clearnet host
 **Anonymous Profile**:
 A locally stored user persona containing local identity keys and contact linkages, completely decoupled from phone numbers, emails, or central registries.
 _Avoid_: Account, user record, login
+
+**Relay Queue**:
+An ephemeral, unidirectional message queue hosted on an HTTPS port 443 relay server allocated specifically for post-quantum ciphertext routing across physical devices.
+_Avoid_: Chat room, web socket, push channel
+
+**Handshake Frame (0x00)**:
+A wire payload carrying PQXDH initialization data, ephemeral keys, and return queue coordinates, enabling automatic contact negotiation upon initial QR scan.
+_Avoid_: Friend request, invite token, auth packet
+
+**Encrypted Message Frame (0x01)**:
+A wire payload containing the sender verifying key prefix and the Double Ratchet AEAD ciphertext, completely opaque to relay operators and ISPs.
+_Avoid_: Cleartext packet, raw message, chat payload
+
+**Privacy-Scrubbed Logger**:
+An in-memory rolling diagnostic ring buffer with automated regex redaction of PINs, cryptographic keys, and tokens, maintaining observability without persistent storage exposure.
+_Avoid_: System crash log, disk log, debug dump
