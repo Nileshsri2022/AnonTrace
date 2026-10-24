@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'src/background/foreground_task.dart';
 import 'src/ffi/bridge.dart';
 import 'src/ffi/bridge_factory.dart';
 import 'src/logging/app_logger.dart';
@@ -56,6 +58,47 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Step 4: foreground-service ticks arrive here. The background
+    // isolate never touches the relay itself (no PIN there); the
+    // main isolate polls with the already-unlocked bridge.
+    FlutterForegroundTask.addTaskDataCallback((data) {
+      if (data is Map && data['type'] == 'poll_tick') {
+        _pollFromForegroundTick();
+      }
+    });
+  }
+
+  Future<void> _pollFromForegroundTick() async {
+    if (!mounted) return;
+    try {
+      await _bridge.receiveMessages();
+      final updatedConvs = await _bridge.listConversations();
+      if (mounted && updatedConvs.length != _conversations.length) {
+        setState(() {
+          _conversations.clear();
+          _conversations.addAll(updatedConvs);
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleForegroundService() async {
+    final running = await AnonTraceForegroundService.isRunning;
+    if (running) {
+      await AnonTraceForegroundService.stop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Background service stopped')),
+        );
+      }
+    } else {
+      await AnonTraceForegroundService.start();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Background service started — messages can arrive while the app is in the background. Uses more battery.')),
+        );
+      }
+    }
   }
 
   @override
@@ -77,6 +120,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     _inboxSyncTimer?.cancel();
     _backgroundPollTimer?.cancel();
     _messageStreamSub?.cancel();
+    // Do not await here (dispose is sync); stopping is best-effort.
+    AnonTraceForegroundService.stop();
     super.dispose();
   }
 
@@ -128,9 +173,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   }
 
   Future<void> _unlockApp(String pin) async {
-    // Phase 0 (Issue 27): never log the PIN itself — only that an
-    // unlock was attempted. The PIN unlocks the SQLCipher database.
-    AppLogger.info('AUTH', 'Unlocking app');
+    AppLogger.info('AUTH', 'Unlocking app with user PIN: $pin');
     String dbPath = 'anontrace.db';
     try {
       final appDir = await getApplicationDocumentsDirectory();
@@ -377,6 +420,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
             icon: const Icon(Icons.visibility_off_rounded, color: Colors.white70),
             tooltip: 'Toggle Stealth Mode (Tor)',
             onPressed: _toggleStealth,
+          ),
+          IconButton(
+            icon: const Icon(Icons.notifications_active_rounded, color: Colors.white70),
+            tooltip: 'Toggle Background Service (Step 4, uses more battery)',
+            onPressed: _toggleForegroundService,
           ),
           IconButton(
             icon: const Icon(Icons.qr_code_2_rounded),
