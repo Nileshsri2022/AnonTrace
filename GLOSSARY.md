@@ -51,3 +51,15 @@ _Avoid_: Polling loop, web socket, long poll
 **Unified Message Stream**:
 An in-memory broadcast stream within the application layer that dispatches newly decrypted messages simultaneously to conversation lists, notifications, and active chat views, eliminating polling race conditions.
 _Avoid_: Database polling, screen refresh loop
+
+**Date Header Chip**:
+A centered visual chip rendered within the conversation timeline whenever consecutive messages cross calendar day boundaries, displaying relative labels ("Today", "Yesterday") or localized calendar dates.
+_Avoid_: Section title, timestamp label, date banner
+
+**Message Timestamp**:
+A formatted local time indicator (`hh:mm a`) placed within the corner of a message bubble denoting the local creation or arrival time of a message without network disclosure.
+_Avoid_: Server timestamp, sync time, delivery clock
+
+**Timeline Grouping Adapter**:
+A pure client-side transformation module that converts a linear array of raw database messages into an alternating list of date separator chips and message bubble items for the scrollable viewport.
+_Avoid_: Chat list sorter, message filter

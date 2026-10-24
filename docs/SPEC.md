@@ -80,3 +80,12 @@ simplex:/contact#/?v=1&relay=<relay_onion_or_https>&queue=<queue_id>&auth=<auth_
 - **Encryption**: Whole-table application-level encryption using 256-bit AES-GCM keys derived from Argon2id.
 - **Volatile Diagnostics**: In-memory 500-slot ring buffer (`AppLogger`) with regex redaction (`LogScrubber`). Zero disk logs.
 - **Cascading Deletion**: Removing a conversation triggers atomic database transactions deleting all ratchet session records, prekeys, and messages without lingering unlinked data.
+
+---
+
+## 6. Presentation & Timeline UX Specification
+
+- **Timeline Grouping**: Linear message collections are transformed on the client device into chronological segments divided by centered `Date Header Chips` ("Today", "Yesterday", or formatted calendar date strings).
+- **Bubble Timestamps**: Individual message bubbles display local 12-hour formatted timestamps (`hh:mm a`) derived from SQLite creation times.
+- **Client-Side Privacy**: Timeline grouping operates purely in the presentation layer with zero network transmission, zero relay disclosure, and zero alteration of post-quantum cryptographic primitives.
+
