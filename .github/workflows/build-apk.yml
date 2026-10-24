@@ -127,7 +127,7 @@ jobs:
 
       - name: Build Android Release APK
         working-directory: apps/simple_signal_mobile
-        run: flutter build apk --release -- --build-cache
+        run: flutter build apk --release
 
       - name: Verify APK Output
         shell: bash
