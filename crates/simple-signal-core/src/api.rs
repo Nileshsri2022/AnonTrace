@@ -444,6 +444,38 @@ impl SimpleSignalApp {
                 }
                 Ok(None)
             }
+            0x02 => {
+                if payload.len() < 1 + 32 + 68 {
+                    return Ok(None);
+                }
+
+                let mut sender_key = [0u8; 32];
+                sender_key.copy_from_slice(&payload[1..33]);
+                let conv_id = format!("conv_{}", hex::encode(&sender_key[..6]));
+                let ciphertext = &payload[33..];
+
+                let mut sessions = self.active_sessions.lock().unwrap();
+                if !sessions.contains_key(&conv_id) {
+                    if let Ok(Some(session_rec)) = self.db.get_latest_session(&conv_id) {
+                        if let Ok(restored) = DoubleRatchetSession::from_bytes(&session_rec.session_record) {
+                            sessions.insert(conv_id.clone(), restored);
+                        }
+                    }
+                }
+
+                if let Some(session) = sessions.get_mut(&conv_id) {
+                    if let Ok(plaintext_bytes) = session.decrypt(ciphertext) {
+                        if let Ok(plaintext) = String::from_utf8(plaintext_bytes) {
+                            if let Ok(json_ack) = serde_json::from_str::<serde_json::Value>(&plaintext) {
+                                if let (Some(ack_id), Some(st)) = (json_ack["ack_msg_id"].as_str(), json_ack["status"].as_str()) {
+                                    let _ = self.db.update_message_status(ack_id, st);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -498,6 +530,11 @@ impl SimpleSignalApp {
     /// Deletes a single message by ID from local storage.
     pub fn delete_message(&self, message_id: &str) -> Result<bool, FfiError> {
         Ok(self.db.delete_message(message_id)?)
+    }
+
+    /// Updates status of a message record.
+    pub fn update_message_status(&self, message_id: &str, status: &str) -> Result<bool, FfiError> {
+        Ok(self.db.update_message_status(message_id, status)?)
     }
 
     /// Sets Tor background battery dormancy (true = soft dormant, false = active).

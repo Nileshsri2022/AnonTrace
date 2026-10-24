@@ -75,3 +75,11 @@ _Avoid_: Jump button, down arrow, scroll helper
 **Quoted Reply**:
 An end-to-end encrypted message payload that embeds an excerpt of a previous message, rendered in the recipient's viewport as an anchored contextual quote card above the replying text without leaking metadata to transport relays.
 _Avoid_: Thread link, message forward, nested post
+
+**Delivery ACK Frame (0x02)**:
+A wire payload containing sender verification and a Double Ratchet encrypted acknowledgment packet (`ack_msg_id`), confirming receipt or reading of an earlier message across unidirectional queues without central telemetry.
+_Avoid_: Read receipt ping, delivery webhook, heartbeat ack
+
+**Message Status Ticks**:
+Visual delivery indicators rendered in outgoing message bubbles denoting state transitions: Single Grey Tick (`sent`), Double Grey Tick (`delivered`), and Double Blue Tick (`read`).
+_Avoid_: Status icons, progress dots, sent flags

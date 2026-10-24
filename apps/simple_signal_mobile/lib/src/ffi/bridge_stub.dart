@@ -85,6 +85,26 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   }
 
   @override
+  Future<bool> updateMessageStatus({required String messageId, required String status}) async {
+    for (final list in _messages.values) {
+      final idx = list.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        final old = list[idx];
+        list[idx] = MessageSummary(
+          id: old.id,
+          conversationId: old.conversationId,
+          direction: old.direction,
+          bodyText: old.bodyText,
+          timestamp: old.timestamp,
+          status: status,
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
   Future<List<MessageSummary>> receiveMessages({String? conversationId}) async {
     return [];
   }

@@ -62,6 +62,7 @@ abstract class SimpleSignalBridge {
   Future<List<ConversationSummary>> listConversations();
   Future<List<MessageSummary>> listMessages(String conversationId);
   Future<bool> deleteMessage(String messageId);
+  Future<bool> updateMessageStatus({required String messageId, required String status});
   Future<List<MessageSummary>> receiveMessages({String? conversationId});
   Future<void> setDormant(bool dormant);
   Future<bool> isActive();

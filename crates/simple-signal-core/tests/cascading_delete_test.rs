@@ -148,3 +148,46 @@ fn test_delete_individual_message() {
     let not_deleted = db.delete_message("msg-999").expect("delete non-existent");
     assert!(!not_deleted);
 }
+
+#[test]
+fn test_update_message_status() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("test_status.db");
+    let key = [0x77u8; 32];
+    let db = EncryptedDatabase::open_or_create(&db_path, &key).expect("open db");
+
+    let conv = ConversationRecord {
+        id: "c1".to_string(),
+        send_queue_uri: "smp://onion1.onion/q1".to_string(),
+        receive_queue_id: "recv-q-1".to_string(),
+        relay_onion_address: "relay1.onion".to_string(),
+        sender_auth_key: vec![0x11; 32],
+        created_at: 1700000000,
+    };
+    db.insert_conversation(&conv).expect("insert conv");
+
+    let msg1 = MessageRecord {
+        id: "msg-status-1".to_string(),
+        conversation_id: "c1".to_string(),
+        direction: "outbound".to_string(),
+        body: b"Hello".to_vec(),
+        timestamp: 100,
+        status: "sent".to_string(),
+    };
+    db.insert_message(&msg1).expect("insert msg1");
+
+    let msgs = db.list_messages("c1").expect("list");
+    assert_eq!(msgs[0].status, "sent");
+
+    let updated = db.update_message_status("msg-status-1", "delivered").expect("update");
+    assert!(updated);
+
+    let msgs2 = db.list_messages("c1").expect("list");
+    assert_eq!(msgs2[0].status, "delivered");
+
+    let updated_read = db.update_message_status("msg-status-1", "read").expect("update");
+    assert!(updated_read);
+
+    let msgs3 = db.list_messages("c1").expect("list");
+    assert_eq!(msgs3[0].status, "read");
+}

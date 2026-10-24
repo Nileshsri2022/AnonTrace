@@ -402,6 +402,16 @@ impl EncryptedDatabase {
         Ok(rows > 0)
     }
 
+    /// Updates the status of an existing message (e.g. "sent", "delivered", "read")
+    pub fn update_message_status(&self, message_id: &str, status: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE messages SET status = ?1 WHERE id = ?2;",
+            params![status, message_id],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Lists all conversation records ordered by created_at DESC
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();

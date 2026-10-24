@@ -213,4 +213,68 @@ void main() {
     // Verify reply banner closed
     expect(find.byKey(const ValueKey('cancel_reply_btn')), findsNothing);
   });
+
+  testWidgets('ChatScreen displays single tick for sent, double grey for delivered, double blue for read', (WidgetTester tester) async {
+    final now = DateTime.now();
+    final conv = ConversationSummary(
+      id: 'conv_ticks',
+      sendQueueUri: 'https://ntfy.sh/q_ticks',
+      receiveQueueId: 'q_ticks_in',
+      createdAt: now.millisecondsSinceEpoch ~/ 1000,
+    );
+
+    final msgSent = MessageSummary(
+      id: 'm_sent',
+      conversationId: 'conv_ticks',
+      direction: 'outbound',
+      bodyText: 'Msg 1 sent',
+      timestamp: now.millisecondsSinceEpoch ~/ 1000,
+      status: 'sent',
+    );
+
+    final msgDelivered = MessageSummary(
+      id: 'm_delivered',
+      conversationId: 'conv_ticks',
+      direction: 'outbound',
+      bodyText: 'Msg 2 delivered',
+      timestamp: (now.millisecondsSinceEpoch ~/ 1000) + 1,
+      status: 'delivered',
+    );
+
+    final msgRead = MessageSummary(
+      id: 'm_read',
+      conversationId: 'conv_ticks',
+      direction: 'outbound',
+      bodyText: 'Msg 3 read',
+      timestamp: (now.millisecondsSinceEpoch ~/ 1000) + 2,
+      status: 'read',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversation: conv,
+          onFetchMessages: (_) async => [msgSent, msgDelivered, msgRead],
+          onSendMessage: (_, __) async => msgSent,
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Verify tick widgets
+    expect(find.byKey(const ValueKey('tick_sent')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tick_delivered')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tick_read')), findsOneWidget);
+
+    // Verify read tick has blue color (0xFF34B7F1)
+    final readIcon = tester.widget<Icon>(find.byKey(const ValueKey('tick_read')));
+    expect(readIcon.color, const Color(0xFF34B7F1));
+    expect(readIcon.icon, Icons.done_all);
+
+    // Verify delivered tick has white70 color
+    final deliveredIcon = tester.widget<Icon>(find.byKey(const ValueKey('tick_delivered')));
+    expect(deliveredIcon.color, Colors.white70);
+    expect(deliveredIcon.icon, Icons.done_all);
+  });
 }

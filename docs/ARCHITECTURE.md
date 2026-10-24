@@ -119,6 +119,18 @@ All data dispatched over the HTTPS relay is framed with an 8-bit command header:
 - The 32-byte sender key allows the receiver to identify which active pairwise ratchet session must process the ciphertext.
 - Decrypted plaintext is immediately inserted into SQLite and returned to UI.
 
+### 3.3 Delivery ACK Frame (`0x02`)
+```
++---------------+-----------------------+-----------------------+
+| Frame Type    | Sender Verifying Key  | Double Ratchet Cipher |
+| 1 Byte (0x02) | 32 Bytes (Ed25519)    | Variable (AES-256-GCM)|
++---------------+-----------------------+-----------------------+
+```
+- Dispatched automatically upon receipt or reading of an incoming message.
+- Contains an encrypted JSON payload: `{"ack_msg_id": "<id>", "status": "delivered" | "read"}`.
+- Triggers sender's Double Ratchet state update and transitions message status ticks from Single Grey (`sent`) to Double Grey (`delivered`) or Double Blue (`read`).
+
+
 ---
 
 ## 4. Threat Model & Security Properties

@@ -59,6 +59,7 @@ Neither queue knows or contains the identifier of the other queue.
 | :--- | :--- |
 | `0x00` (Handshake) | JSON-serialized `ContactHandshakeMessage` containing PQXDH components and return queue coordinates. |
 | `0x01` (Chat Message)| 32-Byte Sender Identity Key + AES-256-GCM Double Ratchet Ciphertext. |
+| `0x02` (Delivery ACK) | 32-Byte Sender Identity Key + AES-256-GCM Double Ratchet Ciphertext carrying delivery/read receipt. |
 
 ---
 

@@ -258,3 +258,32 @@ pub unsafe extern "C" fn simple_signal_delete_message(message_id_ptr: *const c_c
     }
 }
 
+/// Updates status of a message record.
+/// Returns JSON: {"success": true, "updated": bool} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_update_message_status(
+    message_id_ptr: *const c_char,
+    status_ptr: *const c_char,
+) -> *mut c_char {
+    let msg_id = match unsafe { to_rust_str(message_id_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let status = match unsafe { to_rust_str(status_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.update_message_status(msg_id, status) {
+        Ok(updated) => to_c_string(json!({"success": true, "updated": updated}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
+

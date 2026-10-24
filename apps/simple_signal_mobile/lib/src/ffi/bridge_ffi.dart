@@ -36,6 +36,9 @@ typedef _ListMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _DeleteMsgC = Pointer<Utf8> Function(Pointer<Utf8> msgId);
 typedef _DeleteMsgDart = Pointer<Utf8> Function(Pointer<Utf8> msgId);
 
+typedef _UpdateStatusC = Pointer<Utf8> Function(Pointer<Utf8> msgId, Pointer<Utf8> status);
+typedef _UpdateStatusDart = Pointer<Utf8> Function(Pointer<Utf8> msgId, Pointer<Utf8> status);
+
 typedef _RecvMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _RecvMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
@@ -53,6 +56,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _ListConvDart? _listConvFn;
   _ListMsgDart? _listMsgFn;
   _DeleteMsgDart? _deleteMsgFn;
+  _UpdateStatusDart? _updateStatusFn;
   _RecvMsgDart? _recvMsgFn;
   _FreeStringDart? _freeStringFn;
 
@@ -97,6 +101,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _listConvFn = _dylib!.lookupFunction<_ListConvC, _ListConvDart>('simple_signal_list_conversations');
         _listMsgFn = _dylib!.lookupFunction<_ListMsgC, _ListMsgDart>('simple_signal_list_messages');
         _deleteMsgFn = _dylib!.lookupFunction<_DeleteMsgC, _DeleteMsgDart>('simple_signal_delete_message');
+        _updateStatusFn = _dylib!.lookupFunction<_UpdateStatusC, _UpdateStatusDart>('simple_signal_update_message_status');
         _recvMsgFn = _dylib!.lookupFunction<_RecvMsgC, _RecvMsgDart>('simple_signal_receive_messages');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
@@ -356,6 +361,39 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       final idx = list.indexWhere((m) => m.id == messageId);
       if (idx != -1) {
         list.removeAt(idx);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> updateMessageStatus({required String messageId, required String status}) async {
+    AppLogger.ffi('simple_signal_update_message_status', 'Updating message $messageId to $status');
+    if (_isNativeLoaded && _updateStatusFn != null) {
+      final cMsgId = messageId.toNativeUtf8();
+      final cStatus = status.toNativeUtf8();
+      try {
+        final resPtr = _updateStatusFn!(cMsgId, cStatus);
+        final json = _parseAndFree(resPtr);
+        return json['success'] == true && json['updated'] == true;
+      } finally {
+        calloc.free(cMsgId);
+        calloc.free(cStatus);
+      }
+    }
+    for (final list in _fallbackMessages.values) {
+      final idx = list.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        final old = list[idx];
+        list[idx] = MessageSummary(
+          id: old.id,
+          conversationId: old.conversationId,
+          direction: old.direction,
+          bodyText: old.bodyText,
+          timestamp: old.timestamp,
+          status: status,
+        );
         return true;
       }
     }

@@ -277,6 +277,31 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _buildStatusTick(String status) {
+    if (status == 'read') {
+      return const Icon(
+        Icons.done_all,
+        key: ValueKey('tick_read'),
+        size: 14,
+        color: Color(0xFF34B7F1),
+      );
+    } else if (status == 'delivered') {
+      return const Icon(
+        Icons.done_all,
+        key: ValueKey('tick_delivered'),
+        size: 14,
+        color: Colors.white70,
+      );
+    } else {
+      return const Icon(
+        Icons.done,
+        key: ValueKey('tick_sent'),
+        size: 13,
+        color: Colors.white70,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -531,11 +556,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                               ),
                                               if (isOutbound) ...[
                                                 const SizedBox(width: 4),
-                                                const Icon(
-                                                  Icons.done,
-                                                  size: 13,
-                                                  color: Colors.white70,
-                                                ),
+                                                _buildStatusTick(bubble.message.status),
                                               ],
                                             ],
                                           ),
