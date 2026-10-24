@@ -76,6 +76,7 @@ AnonTrace (Simple+Signal) is a metadata-free, post-quantum end-to-end encrypted 
   - `simple_signal_send_message`: Encrypts message body and returns `(message, partner_queue, payload_hex)`.
   - `simple_signal_process_payload`: Ingests wire hex payload, executing handshake negotiation or Double Ratchet decryption.
   - `simple_signal_list_conversations` & `simple_signal_list_messages`: Queries persisted records.
+  - `simple_signal_delete_message`: Atomically wipes a specific message record from SQLite storage.
 
 ### 2.4 Cryptographic Engine (`crates/simple-signal-core/src/crypto/`)
 - **Key Derivation**: Argon2id (`t=3, m=64MB, p=4`) derives master 256-bit AES key.

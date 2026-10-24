@@ -80,6 +80,7 @@ simplex:/contact#/?v=1&relay=<relay_onion_or_https>&queue=<queue_id>&auth=<auth_
 - **Encryption**: Whole-table application-level encryption using 256-bit AES-GCM keys derived from Argon2id.
 - **Volatile Diagnostics**: In-memory 500-slot ring buffer (`AppLogger`) with regex redaction (`LogScrubber`). Zero disk logs.
 - **Cascading Deletion**: Removing a conversation triggers atomic database transactions deleting all ratchet session records, prekeys, and messages without lingering unlinked data.
+- **Local Message Deletion**: Individual messages can be deleted atomically from SQLite via `simple_signal_delete_message` without network transmission or peer session disruption.
 
 ---
 

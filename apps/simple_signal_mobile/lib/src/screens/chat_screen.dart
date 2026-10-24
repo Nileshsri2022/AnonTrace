@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../ffi/bridge.dart';
 import '../utils/timeline_adapter.dart';
 
@@ -8,6 +9,7 @@ class ChatScreen extends StatefulWidget {
   final Future<List<MessageSummary>> Function(String convId) onFetchMessages;
   final Future<MessageSummary> Function(String convId, String text) onSendMessage;
   final Future<List<MessageSummary>> Function(String convId)? onPollMessages;
+  final Future<bool> Function(String messageId)? onDeleteMessage;
   final Stream<MessageSummary>? messageStream;
 
   const ChatScreen({
@@ -16,6 +18,7 @@ class ChatScreen extends StatefulWidget {
     required this.onFetchMessages,
     required this.onSendMessage,
     this.onPollMessages,
+    this.onDeleteMessage,
     this.messageStream,
   }) : super(key: key);
 
@@ -107,6 +110,93 @@ class _ChatScreenState extends State<ChatScreen> {
         SnackBar(content: Text('Send failed: $e')),
       );
     }
+  }
+
+  void _showMessageActionSheet(BuildContext context, MessageSummary msg) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E2630),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (bottomSheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy_rounded, color: Colors.white),
+                title: const Text('Copy Text', style: TextStyle(color: Colors.white)),
+                onTap: () async {
+                  Navigator.pop(bottomSheetContext);
+                  await Clipboard.setData(ClipboardData(text: msg.bodyText));
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Message copied to clipboard'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                title: const Text('Delete for Me', style: TextStyle(color: Colors.redAccent)),
+                onTap: () async {
+                  Navigator.pop(bottomSheetContext);
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogCtx) => AlertDialog(
+                      backgroundColor: const Color(0xFF1E2630),
+                      title: const Text('Delete Message?', style: TextStyle(color: Colors.white)),
+                      content: const Text(
+                        'This message will be permanently deleted from your local encrypted storage.',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogCtx, false),
+                          child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogCtx, true),
+                          child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (confirmed == true && mounted) {
+                    final success = await widget.onDeleteMessage?.call(msg.id) ?? true;
+                    if (success && mounted) {
+                      setState(() {
+                        _messages.removeWhere((m) => m.id == msg.id);
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Message deleted'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -266,65 +356,71 @@ class _ChatScreenState extends State<ChatScreen> {
                               final msg = bubble.message;
                               final isOutbound = msg.direction == 'outbound';
 
+                              final borderRadius = BorderRadius.only(
+                                topLeft: const Radius.circular(16),
+                                topRight: const Radius.circular(16),
+                                bottomLeft: Radius.circular(isOutbound ? 16 : 4),
+                                bottomRight: Radius.circular(isOutbound ? 4 : 16),
+                              );
+
                               return Align(
                                 alignment: isOutbound ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(vertical: 3),
-                                  padding: const EdgeInsets.only(left: 12, right: 12, top: 8, bottom: 6),
-                                  constraints: BoxConstraints(
-                                    maxWidth: MediaQuery.of(context).size.width * 0.78,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF242C37),
-                                    borderRadius: BorderRadius.only(
-                                      topLeft: const Radius.circular(16),
-                                      topRight: const Radius.circular(16),
-                                      bottomLeft: Radius.circular(isOutbound ? 16 : 4),
-                                      bottomRight: Radius.circular(isOutbound ? 4 : 16),
+                                child: InkWell(
+                                  onLongPress: () => _showMessageActionSheet(context, msg),
+                                  borderRadius: borderRadius,
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(vertical: 3),
+                                    padding: const EdgeInsets.only(left: 12, right: 12, top: 8, bottom: 6),
+                                    constraints: BoxConstraints(
+                                      maxWidth: MediaQuery.of(context).size.width * 0.78,
                                     ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.15),
-                                        blurRadius: 3,
-                                        offset: const Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        msg.bodyText,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 14,
-                                          height: 1.3,
+                                    decoration: BoxDecoration(
+                                      color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF242C37),
+                                      borderRadius: borderRadius,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.15),
+                                          blurRadius: 3,
+                                          offset: const Offset(0, 1),
                                         ),
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            bubble.formattedTime,
-                                            style: TextStyle(
-                                              color: isOutbound ? Colors.white70 : Colors.white54,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w400,
-                                            ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          msg.bodyText,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            height: 1.3,
                                           ),
-                                          if (isOutbound) ...[
-                                            const SizedBox(width: 4),
-                                            const Icon(
-                                              Icons.done,
-                                              size: 13,
-                                              color: Colors.white70,
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              bubble.formattedTime,
+                                              style: TextStyle(
+                                                color: isOutbound ? Colors.white70 : Colors.white54,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w400,
+                                              ),
                                             ),
+                                            if (isOutbound) ...[
+                                              const SizedBox(width: 4),
+                                              const Icon(
+                                                Icons.done,
+                                                size: 13,
+                                                color: Colors.white70,
+                                              ),
+                                            ],
                                           ],
-                                        ],
-                                      ),
-                                    ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               );

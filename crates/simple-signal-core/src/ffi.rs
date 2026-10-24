@@ -236,3 +236,25 @@ pub unsafe extern "C" fn simple_signal_receive_messages(conv_id_ptr: *const c_ch
         Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
     }
 }
+
+/// Deletes a single message by ID from local storage.
+/// Returns JSON: {"success": true, "deleted": bool} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_delete_message(message_id_ptr: *const c_char) -> *mut c_char {
+    let msg_id = match unsafe { to_rust_str(message_id_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.delete_message(msg_id) {
+        Ok(deleted) => to_c_string(json!({"success": true, "deleted": deleted}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+

@@ -395,6 +395,13 @@ impl EncryptedDatabase {
         Ok(count as usize)
     }
 
+    /// Deletes a single message record by ID
+    pub fn delete_message(&self, message_id: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute("DELETE FROM messages WHERE id = ?1;", params![message_id])?;
+        Ok(rows > 0)
+    }
+
     /// Lists all conversation records ordered by created_at DESC
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();

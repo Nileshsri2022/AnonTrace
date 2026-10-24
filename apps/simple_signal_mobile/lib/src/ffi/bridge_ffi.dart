@@ -33,6 +33,9 @@ typedef _ListConvDart = Pointer<Utf8> Function();
 typedef _ListMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _ListMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
+typedef _DeleteMsgC = Pointer<Utf8> Function(Pointer<Utf8> msgId);
+typedef _DeleteMsgDart = Pointer<Utf8> Function(Pointer<Utf8> msgId);
+
 typedef _RecvMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _RecvMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
@@ -49,6 +52,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _SendMessageDart? _sendMessageFn;
   _ListConvDart? _listConvFn;
   _ListMsgDart? _listMsgFn;
+  _DeleteMsgDart? _deleteMsgFn;
   _RecvMsgDart? _recvMsgFn;
   _FreeStringDart? _freeStringFn;
 
@@ -92,6 +96,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _sendMessageFn = _dylib!.lookupFunction<_SendMessageC, _SendMessageDart>('simple_signal_send_message');
         _listConvFn = _dylib!.lookupFunction<_ListConvC, _ListConvDart>('simple_signal_list_conversations');
         _listMsgFn = _dylib!.lookupFunction<_ListMsgC, _ListMsgDart>('simple_signal_list_messages');
+        _deleteMsgFn = _dylib!.lookupFunction<_DeleteMsgC, _DeleteMsgDart>('simple_signal_delete_message');
         _recvMsgFn = _dylib!.lookupFunction<_RecvMsgC, _RecvMsgDart>('simple_signal_receive_messages');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
@@ -332,6 +337,29 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
     }
     return List.from(_fallbackMessages[conversationId] ?? []);
+  }
+
+  @override
+  Future<bool> deleteMessage(String messageId) async {
+    AppLogger.ffi('simple_signal_delete_message', 'Deleting message: $messageId');
+    if (_isNativeLoaded && _deleteMsgFn != null) {
+      final cMsgId = messageId.toNativeUtf8();
+      try {
+        final resPtr = _deleteMsgFn!(cMsgId);
+        final json = _parseAndFree(resPtr);
+        return json['success'] == true && json['deleted'] == true;
+      } finally {
+        calloc.free(cMsgId);
+      }
+    }
+    for (final list in _fallbackMessages.values) {
+      final idx = list.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        list.removeAt(idx);
+        return true;
+      }
+    }
+    return false;
   }
 
   @override

@@ -63,3 +63,7 @@ _Avoid_: Server timestamp, sync time, delivery clock
 **Timeline Grouping Adapter**:
 A pure client-side transformation module that converts a linear array of raw database messages into an alternating list of date separator chips and message bubble items for the scrollable viewport.
 _Avoid_: Chat list sorter, message filter
+
+**Local Message Deletion**:
+An atomic cryptographic wipe of a specific individual message record from local encrypted SQLite storage without transmitting network deletion packets or mutating the peer's Double Ratchet session state.
+_Avoid_: Remote retract, recall message, server purge

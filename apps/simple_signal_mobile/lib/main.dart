@@ -128,6 +128,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           conversation: conv,
           messageStream: _bridge.messageStream,
           onFetchMessages: (convId) => _bridge.listMessages(convId),
+          onDeleteMessage: (msgId) => _bridge.deleteMessage(msgId),
           onSendMessage: (convId, text) =>
               _bridge.sendChatMessage(conversationId: convId, text: text),
           onPollMessages: (convId) =>

@@ -73,6 +73,18 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   }
 
   @override
+  Future<bool> deleteMessage(String messageId) async {
+    for (final list in _messages.values) {
+      final idx = list.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        list.removeAt(idx);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
   Future<List<MessageSummary>> receiveMessages({String? conversationId}) async {
     return [];
   }

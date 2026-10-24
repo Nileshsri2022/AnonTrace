@@ -495,6 +495,11 @@ impl SimpleSignalApp {
         Ok(list.into_iter().map(MessageSummary::from).collect())
     }
 
+    /// Deletes a single message by ID from local storage.
+    pub fn delete_message(&self, message_id: &str) -> Result<bool, FfiError> {
+        Ok(self.db.delete_message(message_id)?)
+    }
+
     /// Sets Tor background battery dormancy (true = soft dormant, false = active).
     pub fn set_dormant(&self, dormant: bool) -> Result<(), FfiError> {
         let mode = if dormant {

@@ -98,3 +98,53 @@ fn test_deleting_conversation_triggers_atomic_cascading_delete() {
     assert_eq!(db.count_sessions("conv-alice-charlie").expect("count sessions"), 1);
     assert_eq!(db.count_messages("conv-alice-charlie").expect("count messages"), 1);
 }
+
+#[test]
+fn test_delete_individual_message() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("test_delete_msg.db");
+    let key = [0x77u8; 32];
+    let db = EncryptedDatabase::open_or_create(&db_path, &key).expect("open db");
+
+    let conv = ConversationRecord {
+        id: "c1".to_string(),
+        send_queue_uri: "smp://onion1.onion/q1".to_string(),
+        receive_queue_id: "recv-q-1".to_string(),
+        relay_onion_address: "relay1.onion".to_string(),
+        sender_auth_key: vec![0x11; 32],
+        created_at: 1700000000,
+    };
+    db.insert_conversation(&conv).expect("insert conv");
+
+    let msg1 = MessageRecord {
+        id: "msg-1".to_string(),
+        conversation_id: "c1".to_string(),
+        direction: "outbound".to_string(),
+        body: b"Hello".to_vec(),
+        timestamp: 100,
+        status: "sent".to_string(),
+    };
+    let msg2 = MessageRecord {
+        id: "msg-2".to_string(),
+        conversation_id: "c1".to_string(),
+        direction: "inbound".to_string(),
+        body: b"World".to_vec(),
+        timestamp: 101,
+        status: "received".to_string(),
+    };
+    db.insert_message(&msg1).expect("insert msg1");
+    db.insert_message(&msg2).expect("insert msg2");
+
+    assert_eq!(db.count_messages("c1").expect("count"), 2);
+
+    let deleted = db.delete_message("msg-1").expect("delete msg-1");
+    assert!(deleted);
+
+    assert_eq!(db.count_messages("c1").expect("count"), 1);
+    let msgs = db.list_messages("c1").expect("list");
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].id, "msg-2");
+
+    let not_deleted = db.delete_message("msg-999").expect("delete non-existent");
+    assert!(!not_deleted);
+}
