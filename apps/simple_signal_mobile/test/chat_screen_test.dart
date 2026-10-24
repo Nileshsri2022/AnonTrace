@@ -101,4 +101,53 @@ void main() {
     expect(deleteCalled, isTrue);
     expect(find.text('Top secret communication'), findsNothing);
   });
+
+  testWidgets('ChatScreen shows Scroll-to-Bottom FAB when scrolled up and tapping scrolls down', (WidgetTester tester) async {
+    final now = DateTime.now();
+    final conv = ConversationSummary(
+      id: 'conv_scroll',
+      sendQueueUri: 'https://ntfy.sh/q_scroll',
+      receiveQueueId: 'q_scroll_in',
+      createdAt: now.millisecondsSinceEpoch ~/ 1000,
+    );
+
+    // Generate 30 messages to produce a scrollable list
+    final messages = List.generate(
+      30,
+      (i) => MessageSummary(
+        id: 'msg_$i',
+        conversationId: 'conv_scroll',
+        direction: i % 2 == 0 ? 'inbound' : 'outbound',
+        bodyText: 'Message $i content in conversation timeline',
+        timestamp: (now.millisecondsSinceEpoch ~/ 1000) + i,
+        status: 'sent',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversation: conv,
+          onFetchMessages: (_) async => messages,
+          onSendMessage: (_, __) async => messages.first,
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Scroll up
+    await tester.drag(find.byType(ListView), const Offset(0, 500));
+    await tester.pumpAndSettle();
+
+    // Verify FAB with down arrow icon appears
+    expect(find.byKey(const ValueKey('scroll_to_bottom_fab')), findsOneWidget);
+
+    // Tap FAB
+    await tester.tap(find.byKey(const ValueKey('scroll_to_bottom_fab')));
+    await tester.pumpAndSettle();
+
+    // Verify FAB disappears when scrolled back to bottom
+    expect(find.byKey(const ValueKey('scroll_to_bottom_fab')), findsNothing);
+  });
 }

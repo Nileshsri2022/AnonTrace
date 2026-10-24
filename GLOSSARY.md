@@ -67,3 +67,7 @@ _Avoid_: Chat list sorter, message filter
 **Local Message Deletion**:
 An atomic cryptographic wipe of a specific individual message record from local encrypted SQLite storage without transmitting network deletion packets or mutating the peer's Double Ratchet session state.
 _Avoid_: Remote retract, recall message, server purge
+
+**Scroll-to-Bottom FAB**:
+A floating action button rendered within the chat viewport when a user scrolls back into historical messages, displaying an unread badge indicator if incoming messages arrive while scrolled up and providing smooth single-tap navigation back to the live message frontier.
+_Avoid_: Jump button, down arrow, scroll helper

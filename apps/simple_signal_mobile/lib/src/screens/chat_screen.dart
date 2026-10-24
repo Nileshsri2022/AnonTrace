@@ -28,14 +28,18 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _msgController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   final List<MessageSummary> _messages = [];
   bool _isLoading = true;
+  bool _showScrollToBottom = false;
+  int _unreadWhileScrolled = 0;
   Timer? _pollTimer;
   StreamSubscription<MessageSummary>? _streamSub;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScrollChanged);
     _loadMessages();
     _subscribeToStream();
     _startPolling();
@@ -43,10 +47,41 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScrollChanged);
+    _scrollController.dispose();
     _streamSub?.cancel();
     _pollTimer?.cancel();
     _msgController.dispose();
     super.dispose();
+  }
+
+  void _onScrollChanged() {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.offset;
+    final isScrolledAway = (maxScroll - currentScroll) > 80;
+    if (isScrolledAway != _showScrollToBottom) {
+      setState(() {
+        _showScrollToBottom = isScrolledAway;
+        if (!isScrolledAway) {
+          _unreadWhileScrolled = 0;
+        }
+      });
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+      setState(() {
+        _showScrollToBottom = false;
+        _unreadWhileScrolled = 0;
+      });
+    }
   }
 
   void _subscribeToStream() {
@@ -56,6 +91,9 @@ class _ChatScreenState extends State<ChatScreen> {
           setState(() {
             if (!_messages.any((m) => m.id == msg.id)) {
               _messages.add(msg);
+              if (_showScrollToBottom) {
+                _unreadWhileScrolled++;
+              }
             }
           });
         }
@@ -85,13 +123,22 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadMessages() async {
     try {
       final msgs = await widget.onFetchMessages(widget.conversation.id);
-      setState(() {
-        _messages.clear();
-        _messages.addAll(msgs);
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _messages.clear();
+          _messages.addAll(msgs);
+          _isLoading = false;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          }
+        });
+      }
     } catch (_) {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -102,9 +149,20 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgController.clear();
     try {
       final sent = await widget.onSendMessage(widget.conversation.id, text);
-      setState(() {
-        _messages.add(sent);
-      });
+      if (mounted) {
+        setState(() {
+          _messages.add(sent);
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Send failed: $e')),
@@ -228,10 +286,12 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _messages.isEmpty
-                    ? Center(
+            child: Stack(
+              children: [
+                _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _messages.isEmpty
+                        ? Center(
                         child: SingleChildScrollView(
                           padding: const EdgeInsets.all(28.0),
                           child: Column(
@@ -317,6 +377,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         builder: (context) {
                           final timelineItems = groupMessagesByDate(_messages);
                           return ListView.builder(
+                            controller: _scrollController,
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                             itemCount: timelineItems.length,
                             itemBuilder: (context, index) {
@@ -428,6 +489,70 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         },
                       ),
+                if (_showScrollToBottom)
+                  Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: GestureDetector(
+                      key: const ValueKey('scroll_to_bottom_fab'),
+                      onTap: _scrollToBottom,
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E2630),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white24, width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.35),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          clipBehavior: Clip.none,
+                          children: [
+                            const Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                            if (_unreadWhileScrolled > 0)
+                              Positioned(
+                                top: -3,
+                                right: -3,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.greenAccent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  constraints: const BoxConstraints(
+                                    minWidth: 18,
+                                    minHeight: 18,
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      '$_unreadWhileScrolled',
+                                      style: const TextStyle(
+                                        color: Colors.black,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
