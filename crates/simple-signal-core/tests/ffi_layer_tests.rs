@@ -55,7 +55,9 @@ fn test_ffi_lifecycle() {
     let queue_str = unsafe { CStr::from_ptr(queue_res_ptr).to_str().unwrap() };
     let queue_json: Value = serde_json::from_str(queue_str).unwrap();
     assert_eq!(queue_json["success"], true);
-    assert!(queue_json["queue_id"].as_str().unwrap().starts_with("anontrace_inbox_"));
+    let qid = queue_json["queue_id"].as_str().unwrap();
+    assert_eq!(qid.len(), 64, "Blind queue id must be 64 hex chars");
+    assert!(qid.chars().all(|c| c.is_ascii_hexdigit()));
     unsafe { simple_signal_free_string(queue_res_ptr) };
 
     // 6. Test simple_signal_process_payload with empty payload

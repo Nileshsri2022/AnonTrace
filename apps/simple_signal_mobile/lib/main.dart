@@ -217,11 +217,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           children: [
             _diagRow('Native Core FFI', isNative ? 'Active (Rust libsimple_signal_core.so)' : 'Simulated (In-Memory)', isNative ? Colors.greenAccent : Colors.orangeAccent),
             const SizedBox(height: 12),
-            _diagRow('Key Derivation', 'Argon2id (8MB RAM, 100% Zero-Knowledge)', Colors.greenAccent),
+            _diagRow('Key Derivation', 'Argon2id (64MB RAM, 100% Zero-Knowledge)', Colors.greenAccent),
             const SizedBox(height: 12),
             _diagRow('Local Storage', 'SQLCipher AES-256-GCM (Encrypted at Rest)', Colors.greenAccent),
             const SizedBox(height: 12),
-            _diagRow('Transport Layer', 'Tor v3 Onion Circuits (Isolated Streams)', Colors.greenAccent),
+            _diagRow('Transport Layer', 'Normal: HTTPS 443 Private Relay (Stealth: Tor opt-in)', Colors.greenAccent),
             const SizedBox(height: 12),
             _diagRow('Cryptographic Ratchet', 'PQXDH (ML-KEM-1024 + X25519)', Colors.greenAccent),
             const SizedBox(height: 12),

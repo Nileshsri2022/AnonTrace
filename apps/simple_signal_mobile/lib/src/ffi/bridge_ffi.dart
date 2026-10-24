@@ -48,6 +48,21 @@ typedef _PurgeDart = Pointer<Utf8> Function();
 typedef _RecvMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _RecvMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
+typedef _GetSenderAuthC = Pointer<Utf8> Function(Pointer<Utf8> convId);
+typedef _GetSenderAuthDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
+
+typedef _SetTransportModeC = Pointer<Utf8> Function(Pointer<Utf8> mode);
+typedef _SetTransportModeDart = Pointer<Utf8> Function(Pointer<Utf8> mode);
+
+typedef _GetTransportModeC = Pointer<Utf8> Function();
+typedef _GetTransportModeDart = Pointer<Utf8> Function();
+
+typedef _StartStealthC = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion);
+typedef _StartStealthDart = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion);
+
+typedef _GetStealthStatusC = Pointer<Utf8> Function();
+typedef _GetStealthStatusDart = Pointer<Utf8> Function();
+
 typedef _FreeStringC = Void Function(Pointer<Utf8> ptr);
 typedef _FreeStringDart = void Function(Pointer<Utf8> ptr);
 
@@ -66,6 +81,11 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _SetTimerDart? _setTimerFn;
   _PurgeDart? _purgeFn;
   _RecvMsgDart? _recvMsgFn;
+  _GetSenderAuthDart? _getSenderAuthFn;
+  _SetTransportModeDart? _setTransportModeFn;
+  _GetTransportModeDart? _getTransportModeFn;
+  _StartStealthDart? _startStealthFn;
+  _GetStealthStatusDart? _getStealthStatusFn;
   _FreeStringDart? _freeStringFn;
 
   final RelayClient _relayClient = RelayClient();
@@ -114,6 +134,11 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _setTimerFn = _dylib!.lookupFunction<_SetTimerC, _SetTimerDart>('simple_signal_set_disappearing_timer');
         _purgeFn = _dylib!.lookupFunction<_PurgeC, _PurgeDart>('simple_signal_purge_expired_messages');
         _recvMsgFn = _dylib!.lookupFunction<_RecvMsgC, _RecvMsgDart>('simple_signal_receive_messages');
+        _getSenderAuthFn = _dylib!.lookupFunction<_GetSenderAuthC, _GetSenderAuthDart>('simple_signal_get_conversation_sender_auth');
+        _setTransportModeFn = _dylib!.lookupFunction<_SetTransportModeC, _SetTransportModeDart>('simple_signal_set_transport_mode');
+        _getTransportModeFn = _dylib!.lookupFunction<_GetTransportModeC, _GetTransportModeDart>('simple_signal_get_transport_mode');
+        _startStealthFn = _dylib!.lookupFunction<_StartStealthC, _StartStealthDart>('simple_signal_start_stealth_bootstrap');
+        _getStealthStatusFn = _dylib!.lookupFunction<_GetStealthStatusC, _GetStealthStatusDart>('simple_signal_get_stealth_status');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
         _isNativeLoaded = true;
@@ -189,8 +214,10 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
             final msg = MessageSummary.fromJson(procJson['message'] as Map<String, dynamic>);
             AppLogger.info('Relay', 'Received real-time message via SSE stream for conv: ${msg.conversationId}');
             _messageStreamController.add(msg);
+            _relayClient.ackMessage(queueId: _myInboxQueueId!, messageId: rMsg.id);
           } else if (procJson['success'] == true) {
             AppLogger.info('Relay', 'Processed incoming handshake frame via SSE stream');
+            _relayClient.ackMessage(queueId: _myInboxQueueId!, messageId: rMsg.id);
           }
         } catch (e) {
           AppLogger.warning('Relay', 'Error processing streamed payload: $e');
@@ -218,6 +245,54 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
     }
     return _myInboxQueueId;
+  }
+
+  /// Partner sender-auth key (hex) for a conversation, for private-relay
+  /// POSTs. Returns null if the native function is unavailable.
+  String? _senderAuthForConversation(String conversationId) {
+    if (!_isNativeLoaded || _getSenderAuthFn == null) return null;
+    final cConvId = conversationId.toNativeUtf8();
+    try {
+      final resPtr = _getSenderAuthFn!(cConvId);
+      final json = _parseAndFree(resPtr);
+      if (json['success'] == true && json['sender_auth_hex'] != null) {
+        return json['sender_auth_hex'] as String;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(cConvId);
+    }
+  }
+
+  /// Starts the embedded Arti bootstrap in the background (Ticket 26.3).
+  /// Returns immediately; poll [getStealthStatus] for progress. Never
+  /// routes traffic through Flutter HttpClient SOCKS — Stealth traffic
+  /// goes through the Rust Arti client only.
+  Future<bool> startStealthBootstrap({required String dataDir, String? onionAddress}) async {
+    if (!_isNativeLoaded || _startStealthFn == null) return false;
+    final cDir = dataDir.toNativeUtf8();
+    final cOnion = (onionAddress ?? '').toNativeUtf8();
+    try {
+      final resPtr = _startStealthFn!(cDir, cOnion);
+      final json = _parseAndFree(resPtr);
+      return json['success'] == true;
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(cDir);
+      calloc.free(cOnion);
+    }
+  }
+
+  /// Current Stealth bootstrap status, or null if unavailable.
+  Map<String, dynamic>? getStealthStatus() {
+    if (!_isNativeLoaded || _getStealthStatusFn == null) return null;
+    final resPtr = _getStealthStatusFn!();
+    final json = _parseAndFree(resPtr);
+    if (json['success'] == true) return json;
+    return null;
   }
 
   @override
@@ -248,7 +323,9 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
           final handshakeHex = json['handshake_hex'] as String?;
           if (partnerQueue != null && partnerQueue.isNotEmpty && handshakeHex != null && handshakeHex.isNotEmpty) {
             try {
-              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: handshakeHex);
+              final convId = (json['conversation'] as Map<String, dynamic>)['id'] as String?;
+              final senderAuth = convId != null ? _senderAuthForConversation(convId) : null;
+              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: handshakeHex, senderAuthHex: senderAuth);
               if (ok) {
                 AppLogger.info('Relay', 'Handshake payload dispatched to relay queue: $partnerQueue');
               } else {
@@ -291,7 +368,8 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
           final payloadHex = json['payload_hex'] as String?;
           if (partnerQueue != null && partnerQueue.isNotEmpty && payloadHex != null && payloadHex.isNotEmpty) {
             try {
-              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: payloadHex);
+              final senderAuth = _senderAuthForConversation(conversationId);
+              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: payloadHex, senderAuthHex: senderAuth);
               if (ok) {
                 AppLogger.info('Relay', 'Encrypted payload dispatched to relay queue: $partnerQueue');
               } else {
@@ -484,6 +562,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
                   if (conversationId == null || conversationId.isEmpty || msg.conversationId == conversationId) {
                     newlyReceived.add(msg);
                   }
+                  await _relayClient.ackMessage(queueId: _myInboxQueueId!, messageId: rMsg.id);
                 }
               } finally {
                 calloc.free(cHex);

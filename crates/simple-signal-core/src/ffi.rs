@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 use std::sync::Mutex;
 use serde_json::json;
 
-use crate::api::SimpleSignalApp;
+use crate::api::{SimpleSignalApp, TransportMode};
 
 static APP_INSTANCE: Mutex<Option<SimpleSignalApp>> = Mutex::new(None);
 
@@ -59,8 +59,8 @@ pub unsafe extern "C" fn simple_signal_init(
     }
 }
 
-/// Returns the local user's permanent inbox queue ID.
-/// Returns JSON: {"success": true, "queue_id": "anontrace_inbox_..."} or error.
+/// Returns the local user's blind inbox queue ID (Option B).
+/// Returns JSON: {"success": true, "queue_id": "<64 hex chars>"} or error.
 #[unsafe(no_mangle)]
 pub extern "C" fn simple_signal_get_inbox_queue() -> *mut c_char {
     let guard = APP_INSTANCE.lock().unwrap();
@@ -308,6 +308,134 @@ pub unsafe extern "C" fn simple_signal_set_disappearing_timer(
         Ok(_) => to_c_string(json!({"success": true}).to_string()),
         Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
     }
+}
+
+/// Returns a conversation's partner sender-auth key (hex) for relay POSTs.
+/// Returns JSON: {"success": true, "sender_auth_hex": "..."} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_get_conversation_sender_auth(
+    conv_id_ptr: *const c_char,
+) -> *mut c_char {
+    let conv_id = match unsafe { to_rust_str(conv_id_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    match app.conversation_sender_auth_hex(conv_id) {
+        Some(hex) => to_c_string(json!({"success": true, "sender_auth_hex": hex}).to_string()),
+        None => to_c_string(json!({"success": false, "error": "Conversation not found"}).to_string()),
+    }
+}
+
+/// Sets the transport mode ("normal" or "stealth").
+/// Returns JSON: {"success": true, "mode": "..."} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_set_transport_mode(
+    mode_ptr: *const c_char,
+) -> *mut c_char {
+    let mode_str = match unsafe { to_rust_str(mode_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    match TransportMode::from_str(mode_str) {
+        Some(mode) => {
+            app.set_transport_mode(mode);
+            to_c_string(json!({"success": true, "mode": mode.as_str()}).to_string())
+        }
+        None => to_c_string(json!({"success": false, "error": "Unknown transport mode"}).to_string()),
+    }
+}
+
+/// Starts the embedded Arti bootstrap in the background (Ticket 26.3).
+/// `data_dir_ptr` is the app documents dir from Flutter; `onion_ptr`
+/// is the relay onion address, or empty for none.
+/// Returns JSON: {"success": true} or error. Poll stealth status for progress.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_start_stealth_bootstrap(
+    data_dir_ptr: *const c_char,
+    onion_ptr: *const c_char,
+) -> *mut c_char {
+    let data_dir = match unsafe { to_rust_str(data_dir_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let onion_str = if onion_ptr.is_null() {
+        ""
+    } else {
+        match unsafe { to_rust_str(onion_ptr) } {
+            Ok(s) => s,
+            Err(_) => return to_c_string(json!({"success": false, "error": "Invalid onion address"}).to_string()),
+        }
+    };
+    let onion = if onion_str.is_empty() {
+        None
+    } else {
+        Some(onion_str.to_string())
+    };
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    match app.start_stealth_bootstrap(data_dir, onion) {
+        Ok(()) => to_c_string(json!({"success": true}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
+/// Returns the current Stealth bootstrap status.
+/// Returns JSON: {"success": true, "state": "...", "frac": 0.0, "ready": false, "blocked": null, "onion": null} or error.
+#[unsafe(no_mangle)]
+pub extern "C" fn simple_signal_get_stealth_status() -> *mut c_char {
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    let status = app.stealth_status();
+    let state_str = match &status.state {
+        crate::net::tor::StealthState::NotStarted => "not_started",
+        crate::net::tor::StealthState::Bootstrapping => "bootstrapping",
+        crate::net::tor::StealthState::Ready => "ready",
+        crate::net::tor::StealthState::Failed(_) => "failed",
+    };
+    let failed_msg = match &status.state {
+        crate::net::tor::StealthState::Failed(msg) => Some(msg.clone()),
+        _ => None,
+    };
+    to_c_string(
+        json!({
+            "success": true,
+            "state": state_str,
+            "frac": status.frac,
+            "ready": status.ready_for_traffic,
+            "blocked": status.blocked,
+            "failed": failed_msg,
+            "onion": status.onion_address,
+        })
+        .to_string(),
+    )
+}
+
+/// Returns the current transport mode.
+/// Returns JSON: {"success": true, "mode": "normal"|"stealth"} or error.
+#[unsafe(no_mangle)]
+pub extern "C" fn simple_signal_get_transport_mode() -> *mut c_char {
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    to_c_string(json!({"success": true, "mode": app.transport_mode().as_str()}).to_string())
 }
 
 /// Purges all expired messages across all conversations.

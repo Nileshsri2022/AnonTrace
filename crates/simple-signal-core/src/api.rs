@@ -22,7 +22,8 @@ use crate::crypto::pqxdh::{
     PreKeySecretBundle,
 };
 use crate::crypto::ratchet::DoubleRatchetSession;
-use crate::net::tor::{DormancyMode, TorClientManager, TorError};
+use crate::net::relay::blind_queue_id;
+use crate::net::tor::{DormancyMode, StealthStatus, TorClientManager, TorError};
 use crate::storage::db::{
     compute_auth_verifier, derive_key, ConversationRecord, EncryptedDatabase,
     KeyDerivationParams, MessageRecord, SessionRecord, StorageError, StoredIdentity,
@@ -116,6 +117,41 @@ impl From<MessageRecord> for MessageSummary {
     }
 }
 
+/// Default private-relay base URL (Option B, Normal Mode).
+/// Deployment placeholder: the operator must point this host at a
+/// running anontrace-relay behind TLS on port 443. Until then the
+/// client must fail with "no relay configured" rather than falling
+/// back to a public relay — that fallback is handled by callers
+/// checking for an empty/unreachable base URL, not by this constant.
+pub const DEFAULT_RELAY_URL: &str = "https://relay.anontrace.app";
+
+/// Transport mode (Option B). Normal = HTTPS 443 to the private relay
+/// (default). Stealth = embedded Arti (opt-in; the Arti bootstrap path
+/// is a separate ticket — see Issue 26, Ticket 26.3 — and this flag
+/// alone does not yet route traffic through Tor).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransportMode {
+    Normal,
+    Stealth,
+}
+
+impl TransportMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransportMode::Normal => "normal",
+            TransportMode::Stealth => "stealth",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "normal" => Some(TransportMode::Normal),
+            "stealth" => Some(TransportMode::Stealth),
+            _ => None,
+        }
+    }
+}
+
 /// The main application instance bound to the Flutter UI via FFI.
 /// Encapsulates encrypted database, Tor transport, PQXDH identity keys,
 /// and live Double Ratchet sessions.
@@ -126,6 +162,9 @@ pub struct SimpleSignalApp {
     _prekey_secrets: Arc<PreKeySecretBundle>,
     prekey_bundle: PreKeyBundle,
     active_sessions: Arc<Mutex<HashMap<String, DoubleRatchetSession>>>,
+    queue_secret: [u8; 32],
+    sender_auth_key: [u8; 32],
+    transport_mode: Arc<Mutex<TransportMode>>,
 }
 
 impl std::fmt::Debug for SimpleSignalApp {
@@ -403,6 +442,24 @@ fn stored_from_prekeys(bundle: &PreKeyBundle, secrets: &PreKeySecretBundle) -> S
     }
 }
 
+fn load_or_create_secret(db: &EncryptedDatabase, key: &str) -> Result<[u8; 32], FfiError> {
+    if let Some(bytes) = db.load_local_value(key)? {
+        if bytes.len() == 32 {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&bytes);
+            return Ok(out);
+        }
+        return Err(FfiError::DatabaseError(format!(
+            "Stored transport secret {} has unexpected length",
+            key
+        )));
+    }
+    let mut secret = [0u8; 32];
+    OsRng.fill_bytes(&mut secret);
+    db.store_local_value(key, &secret)?;
+    Ok(secret)
+}
+
 impl SimpleSignalApp {
     /// Initializes or unlocks the application using the Master PIN / passphrase.
     /// Load-or-create: an existing database keeps its identity and
@@ -453,6 +510,10 @@ impl SimpleSignalApp {
             }
         };
 
+        // Per-inbox transport secrets (Option B): load-or-create, like identity.
+        let queue_secret = load_or_create_secret(&db, "queue_secret")?;
+        let sender_auth_key = load_or_create_secret(&db, "sender_auth_key")?;
+
         let tor_manager = TorClientManager::default_client();
 
         // Restore active sessions from encrypted SQLite storage for all known conversations
@@ -474,13 +535,68 @@ impl SimpleSignalApp {
             _prekey_secrets: Arc::new(secrets),
             prekey_bundle: bundle,
             active_sessions: Arc::new(Mutex::new(active_sessions)),
+            queue_secret,
+            sender_auth_key,
+            transport_mode: Arc::new(Mutex::new(TransportMode::Normal)),
         })
     }
 
-    /// Returns the user's permanent local inbox queue ID derived from Ed25519 identity key.
+    /// Returns the user's blind inbox queue id (Option B).
+    /// This is the relay topic: `HMAC-SHA256(queue_secret, "anontrace-inbound-v1")`.
+    /// It replaces the old `anontrace_inbox_<identity prefix>` id, which
+    /// leaked a stable identity-derived topic to the relay.
     pub fn my_inbox_queue_id(&self) -> String {
-        let queue_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
-        format!("anontrace_inbox_{}", queue_suffix)
+        blind_queue_id(&self.queue_secret)
+    }
+
+    /// Alias for my_inbox_queue_id, for clarity at call sites.
+    pub fn my_blind_queue_id(&self) -> String {
+        self.my_inbox_queue_id()
+    }
+
+    /// Hex of this inbox's sender auth key (for the contact link and
+    /// for relay POSTs to a partner's queue — see conversation_sender_auth_hex).
+    pub fn my_sender_auth_key_hex(&self) -> String {
+        hex::encode(self.sender_auth_key)
+    }
+
+    /// Sender auth key (hex) for a conversation's partner queue, from
+    /// the stored conversation record. Returns None if unknown.
+    pub fn conversation_sender_auth_hex(&self, conversation_id: &str) -> Option<String> {
+        self.db
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()
+            .map(|conv| hex::encode(conv.sender_auth_key))
+    }
+
+    /// Current transport mode (Normal by default; Stealth is opt-in).
+    pub fn transport_mode(&self) -> TransportMode {
+        *self.transport_mode.lock().unwrap()
+    }
+
+    /// Sets the transport mode. This flag alone does not yet route
+    /// traffic through Arti — see Issue 26, Ticket 26.3.
+    pub fn set_transport_mode(&self, mode: TransportMode) {
+        *self.transport_mode.lock().unwrap() = mode;
+    }
+
+    /// Starts the embedded Arti bootstrap in the background (Ticket 26.3).
+    /// `data_dir` must come from Flutter (app documents dir), never the
+    /// old `./tor_data` default. Returns immediately; poll
+    /// `stealth_status` for progress.
+    pub fn start_stealth_bootstrap(
+        &self,
+        data_dir: &str,
+        onion_address: Option<String>,
+    ) -> Result<(), TorError> {
+        self.tor_manager
+            .start_stealth_bootstrap(std::path::Path::new(data_dir), onion_address)
+    }
+
+    /// Current Stealth bootstrap status.
+    pub fn stealth_status(&self) -> StealthStatus {
+        self.tor_manager.stealth_status()
     }
 
     /// Generates the user's standardized Contact Link for QR display.
@@ -490,9 +606,9 @@ impl SimpleSignalApp {
         qr_bundle.kyber_prekey = Vec::new();
 
         let link = ContactLink {
-            relay_onion: "https://ntfy.sh".to_string(),
+            relay_onion: DEFAULT_RELAY_URL.to_string(),
             receive_queue_id: self.my_inbox_queue_id(),
-            sender_auth_key: vec![0x11; 32],
+            sender_auth_key: self.sender_auth_key.to_vec(),
             prekey_bundle: qr_bundle,
         };
 
@@ -509,9 +625,9 @@ impl SimpleSignalApp {
         let remote_link = ContactLink::from_uri(uri)?;
 
         let my_return_queue = QueueCoordinates {
-            relay_onion: "https://ntfy.sh".to_string(),
+            relay_onion: DEFAULT_RELAY_URL.to_string(),
             queue_id: self.my_inbox_queue_id(),
-            sender_auth_key: vec![0x22; 32],
+            sender_auth_key: self.sender_auth_key.to_vec(),
         };
 
         let (handshake_msg, session) =

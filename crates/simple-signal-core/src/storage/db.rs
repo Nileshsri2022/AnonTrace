@@ -289,6 +289,11 @@ impl EncryptedDatabase {
                 status TEXT NOT NULL,
                 expires_at INTEGER DEFAULT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS local_kv (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            );
             "#
         )?;
 
@@ -509,6 +514,29 @@ impl EncryptedDatabase {
             kyber_public,
             kyber_secret,
         }))
+    }
+
+    /// Stores a small local value (e.g. per-inbox queue secret) in local_kv.
+    pub fn store_local_value(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO local_kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a local value, if stored.
+    pub fn load_local_value(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM local_kv WHERE key = ?1 LIMIT 1;")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Inserts or updates a conversation record in `conversations` idempotently
