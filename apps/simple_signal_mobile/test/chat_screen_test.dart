@@ -150,4 +150,67 @@ void main() {
     // Verify FAB disappears when scrolled back to bottom
     expect(find.byKey(const ValueKey('scroll_to_bottom_fab')), findsNothing);
   });
+
+  testWidgets('ChatScreen activates reply preview banner on reply action and renders quoted bubbles', (WidgetTester tester) async {
+    final now = DateTime.now();
+    final conv = ConversationSummary(
+      id: 'conv_reply',
+      sendQueueUri: 'https://ntfy.sh/q_reply',
+      receiveQueueId: 'q_reply_in',
+      createdAt: now.millisecondsSinceEpoch ~/ 1000,
+    );
+
+    final msg1 = MessageSummary(
+      id: 'm1',
+      conversationId: 'conv_reply',
+      direction: 'inbound',
+      bodyText: 'Are you using post-quantum crypto?',
+      timestamp: now.millisecondsSinceEpoch ~/ 1000,
+      status: 'received',
+    );
+
+    final msg2 = MessageSummary(
+      id: 'm2',
+      conversationId: 'conv_reply',
+      direction: 'outbound',
+      bodyText: '[QUOTE:Are you using post-quantum crypto?]\nYes, ML-KEM-1024 enabled!',
+      timestamp: (now.millisecondsSinceEpoch ~/ 1000) + 10,
+      status: 'sent',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversation: conv,
+          onFetchMessages: (_) async => [msg1, msg2],
+          onSendMessage: (_, __) async => msg1,
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Verify msg2 renders both the quote snippet and the reply text
+    expect(find.text('Are you using post-quantum crypto?'), findsWidgets);
+    expect(find.text('Yes, ML-KEM-1024 enabled!'), findsOneWidget);
+
+    // Long press msg1 to trigger Reply
+    await tester.longPress(find.text('Are you using post-quantum crypto?').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reply'), findsOneWidget);
+    await tester.tap(find.text('Reply'));
+    await tester.pumpAndSettle();
+
+    // Verify reply preview banner is displayed
+    expect(find.text('Anonymous Peer'), findsOneWidget);
+    expect(find.byKey(const ValueKey('cancel_reply_btn')), findsOneWidget);
+
+    // Tap cancel button
+    await tester.tap(find.byKey(const ValueKey('cancel_reply_btn')));
+    await tester.pumpAndSettle();
+
+    // Verify reply banner closed
+    expect(find.byKey(const ValueKey('cancel_reply_btn')), findsNothing);
+  });
 }

@@ -109,3 +109,30 @@ List<TimelineItem> groupMessagesByDate(List<MessageSummary> messages, {DateTime?
 
   return items;
 }
+
+/// Represents a parsed message body with optional in-band quoted snippet.
+class ParsedMessageBody {
+  final String? quotedSnippet;
+  final String mainText;
+
+  const ParsedMessageBody({this.quotedSnippet, required this.mainText});
+}
+
+/// Builds an in-band quoted message string.
+String buildQuotedPayload(String quotedSnippet, String replyText) {
+  final cleanSnippet = quotedSnippet.replaceAll('\n', ' ');
+  final snippet = cleanSnippet.length > 150 ? '${cleanSnippet.substring(0, 147)}...' : cleanSnippet;
+  return '[QUOTE:$snippet]\n$replyText';
+}
+
+/// Parses a message body, extracting quoted snippet if present.
+ParsedMessageBody parseMessageBody(String rawBody) {
+  if (rawBody.startsWith('[QUOTE:') && rawBody.contains(']\n')) {
+    final closeIdx = rawBody.indexOf(']\n');
+    final snippet = rawBody.substring(7, closeIdx);
+    final mainText = rawBody.substring(closeIdx + 2);
+    return ParsedMessageBody(quotedSnippet: snippet, mainText: mainText);
+  }
+  return ParsedMessageBody(mainText: rawBody);
+}
+

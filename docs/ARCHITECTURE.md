@@ -53,7 +53,7 @@ AnonTrace (Simple+Signal) is a metadata-free, post-quantum end-to-end encrypted 
 - **Framework**: Flutter 3.x / Dart 3.x.
 - **Views**:
   - `LockScreen`: Enforces Master PIN and biometric authentication before initializing database keys.
-  - `ChatScreen`: Renders conversation timelines with instant reactive subscription to `bridge.messageStream`, date-grouped timeline chips ("Today", "Yesterday", calendar dates), per-message localized timestamps (`hh:mm a`), and Scroll-to-Bottom FAB with live unread badge.
+  - `ChatScreen`: Renders conversation timelines with instant reactive subscription to `bridge.messageStream`, date-grouped timeline chips ("Today", "Yesterday", calendar dates), per-message localized timestamps (`hh:mm a`), Scroll-to-Bottom FAB with live unread badge, and in-band quoted message reply previews.
   - `QrContactScreen`: Displays compact Contact Link QR codes (< 500 chars) and drives the `MobileScanner` camera feed.
   - `DebugLogScreen`: Live diagnostic viewer with category filters and secret redaction.
 

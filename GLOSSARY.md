@@ -71,3 +71,7 @@ _Avoid_: Remote retract, recall message, server purge
 **Scroll-to-Bottom FAB**:
 A floating action button rendered within the chat viewport when a user scrolls back into historical messages, displaying an unread badge indicator if incoming messages arrive while scrolled up and providing smooth single-tap navigation back to the live message frontier.
 _Avoid_: Jump button, down arrow, scroll helper
+
+**Quoted Reply**:
+An end-to-end encrypted message payload that embeds an excerpt of a previous message, rendered in the recipient's viewport as an anchored contextual quote card above the replying text without leaking metadata to transport relays.
+_Avoid_: Thread link, message forward, nested post

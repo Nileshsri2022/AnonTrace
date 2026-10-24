@@ -89,5 +89,6 @@ simplex:/contact#/?v=1&relay=<relay_onion_or_https>&queue=<queue_id>&auth=<auth_
 - **Timeline Grouping**: Linear message collections are transformed on the client device into chronological segments divided by centered `Date Header Chips` ("Today", "Yesterday", or formatted calendar date strings).
 - **Bubble Timestamps**: Individual message bubbles display local 12-hour formatted timestamps (`hh:mm a`) derived from SQLite creation times.
 - **Scroll-to-Bottom FAB**: An automatic floating action button with unread message badge count enables effortless jump-to-latest navigation when reviewing historical conversations.
+- **In-Band Quoted Replies**: Messages can reference prior utterances via `[QUOTE:snippet]\ntext` payload encapsulation, rendering contextual quote cards in bubbles with zero metadata leakage to network relays.
 - **Client-Side Privacy**: Timeline grouping operates purely in the presentation layer with zero network transmission, zero relay disclosure, and zero alteration of post-quantum cryptographic primitives.
 

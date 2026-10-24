@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = true;
   bool _showScrollToBottom = false;
   int _unreadWhileScrolled = 0;
+  MessageSummary? _replyingTo;
   Timer? _pollTimer;
   StreamSubscription<MessageSummary>? _streamSub;
 
@@ -146,9 +147,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
 
+    final quotedMsg = _replyingTo;
+    final outboundText = quotedMsg != null
+        ? buildQuotedPayload(quotedMsg.bodyText, text)
+        : text;
+
     _msgController.clear();
+    setState(() {
+      _replyingTo = null;
+    });
+
     try {
-      final sent = await widget.onSendMessage(widget.conversation.id, text);
+      final sent = await widget.onSendMessage(widget.conversation.id, outboundText);
       if (mounted) {
         setState(() {
           _messages.add(sent);
@@ -190,6 +200,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   color: Colors.white24,
                   borderRadius: BorderRadius.circular(2),
                 ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.reply_rounded, color: Colors.blueAccent),
+                title: const Text('Reply', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(bottomSheetContext);
+                  setState(() {
+                    _replyingTo = msg;
+                  });
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.copy_rounded, color: Colors.white),
@@ -424,63 +444,103 @@ class _ChatScreenState extends State<ChatScreen> {
                                 bottomRight: Radius.circular(isOutbound ? 4 : 16),
                               );
 
+                              final parsedBody = parseMessageBody(msg.bodyText);
+
                               return Align(
                                 alignment: isOutbound ? Alignment.centerRight : Alignment.centerLeft,
-                                child: InkWell(
-                                  onLongPress: () => _showMessageActionSheet(context, msg),
-                                  borderRadius: borderRadius,
-                                  child: Container(
-                                    margin: const EdgeInsets.symmetric(vertical: 3),
-                                    padding: const EdgeInsets.only(left: 12, right: 12, top: 8, bottom: 6),
-                                    constraints: BoxConstraints(
-                                      maxWidth: MediaQuery.of(context).size.width * 0.78,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF242C37),
-                                      borderRadius: borderRadius,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.15),
-                                          blurRadius: 3,
-                                          offset: const Offset(0, 1),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          msg.bodyText,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 14,
-                                            height: 1.3,
+                                child: Dismissible(
+                                  key: Key('msg_${msg.id}'),
+                                  direction: DismissDirection.startToEnd,
+                                  confirmDismiss: (_) async {
+                                    setState(() => _replyingTo = msg);
+                                    return false;
+                                  },
+                                  background: Container(
+                                    alignment: Alignment.centerLeft,
+                                    padding: const EdgeInsets.only(left: 16),
+                                    child: const Icon(Icons.reply_rounded, color: Colors.blueAccent),
+                                  ),
+                                  child: InkWell(
+                                    onLongPress: () => _showMessageActionSheet(context, msg),
+                                    borderRadius: borderRadius,
+                                    child: Container(
+                                      margin: const EdgeInsets.symmetric(vertical: 3),
+                                      padding: const EdgeInsets.only(left: 12, right: 12, top: 8, bottom: 6),
+                                      constraints: BoxConstraints(
+                                        maxWidth: MediaQuery.of(context).size.width * 0.78,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF242C37),
+                                        borderRadius: borderRadius,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.15),
+                                            blurRadius: 3,
+                                            offset: const Offset(0, 1),
                                           ),
-                                        ),
-                                        const SizedBox(height: 3),
-                                        Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              bubble.formattedTime,
-                                              style: TextStyle(
-                                                color: isOutbound ? Colors.white70 : Colors.white54,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w400,
+                                        ],
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (parsedBody.quotedSnippet != null)
+                                            Container(
+                                              margin: const EdgeInsets.only(bottom: 6),
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: isOutbound ? Colors.black.withOpacity(0.2) : Colors.black.withOpacity(0.25),
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border(
+                                                  left: BorderSide(
+                                                    color: isOutbound ? Colors.white70 : const Color(0xFF2C6BED),
+                                                    width: 3,
+                                                  ),
+                                                ),
+                                              ),
+                                              child: Text(
+                                                parsedBody.quotedSnippet!,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 11,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
                                               ),
                                             ),
-                                            if (isOutbound) ...[
-                                              const SizedBox(width: 4),
-                                              const Icon(
-                                                Icons.done,
-                                                size: 13,
-                                                color: Colors.white70,
+                                          Text(
+                                            parsedBody.mainText,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              height: 1.3,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                bubble.formattedTime,
+                                                style: TextStyle(
+                                                  color: isOutbound ? Colors.white70 : Colors.white54,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w400,
+                                                ),
                                               ),
+                                              if (isOutbound) ...[
+                                                const SizedBox(width: 4),
+                                                const Icon(
+                                                  Icons.done,
+                                                  size: 13,
+                                                  color: Colors.white70,
+                                                ),
+                                              ],
                                             ],
-                                          ],
-                                        ),
-                                      ],
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -554,6 +614,52 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
+          if (_replyingTo != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: const Color(0xFF161C24),
+              child: Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2C6BED),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _replyingTo!.direction == 'outbound' ? 'You' : 'Anonymous Peer',
+                          style: const TextStyle(
+                            color: Color(0xFF2C6BED),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _replyingTo!.bodyText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('cancel_reply_btn'),
+                    icon: const Icon(Icons.close_rounded, size: 20, color: Colors.white60),
+                    onPressed: () => setState(() => _replyingTo = null),
+                  ),
+                ],
+              ),
+            ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             color: const Color(0xFF1A2028),

@@ -84,5 +84,18 @@ void main() {
       final items = groupMessagesByDate([]);
       expect(items, isEmpty);
     });
+
+    test('buildQuotedPayload and parseMessageBody correctly format and extract quotes', () {
+      final payload = buildQuotedPayload('Previous text snippet', 'My reply answer');
+      expect(payload, equals('[QUOTE:Previous text snippet]\nMy reply answer'));
+
+      final parsed = parseMessageBody(payload);
+      expect(parsed.quotedSnippet, equals('Previous text snippet'));
+      expect(parsed.mainText, equals('My reply answer'));
+
+      final normalParsed = parseMessageBody('Plain regular message');
+      expect(normalParsed.quotedSnippet, isNull);
+      expect(normalParsed.mainText, equals('Plain regular message'));
+    });
   });
 }
