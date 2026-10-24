@@ -13,31 +13,60 @@ class RelayMessage {
   });
 }
 
-/// SimpleX-compatible HTTPS relay queue transport client.
-/// Transmits and polls end-to-end encrypted post-quantum ciphertexts across unidirectional queues.
+/// Private-relay HTTPS transport client (Option B, Normal Mode).
+/// Transmits and polls end-to-end encrypted post-quantum ciphertexts
+/// across blind queues. The default relay is a deployment placeholder:
+/// the operator must point `relay.anontrace.app` at a running
+/// anontrace-relay behind TLS on port 443. Do NOT fall back to a
+/// public relay (e.g. ntfy.sh) — a failed send must surface as a
+/// failure, not a silent privacy downgrade.
 class RelayClient {
   final String baseUrl;
   final HttpClient _client;
   bool _isClosed = false;
 
   RelayClient({
-    this.baseUrl = 'https://ntfy.sh',
+    this.baseUrl = 'https://relay.anontrace.app',
     HttpClient? client,
   }) : _client = client ?? HttpClient() {
     _client.connectionTimeout = const Duration(seconds: 10);
   }
 
-  /// Sends an encrypted payload into a recipient's queue over HTTPS.
+  /// Sends an encrypted payload into a recipient's blind queue over HTTPS.
+  /// `senderAuthHex` is the partner's sender auth key from their contact
+  /// link; the relay rejects posts without it.
   Future<bool> sendPayload({
     required String queueId,
     required String payloadHex,
+    String? senderAuthHex,
   }) async {
     try {
-      final uri = Uri.parse('$baseUrl/$queueId');
+      final uri = Uri.parse('$baseUrl/q/$queueId');
       final request = await _client.postUrl(uri);
       request.persistentConnection = true;
       request.headers.set(HttpHeaders.contentTypeHeader, 'text/plain; charset=utf-8');
+      if (senderAuthHex != null && senderAuthHex.isNotEmpty) {
+        request.headers.set('X-Sender-Auth', senderAuthHex);
+      }
       request.write(payloadHex);
+      final response = await request.close();
+      await response.drain();
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Acknowledges (deletes) a message on the private relay after it
+  /// has been processed. Zero retention: un-ACKed messages are kept
+  /// only until the relay TTL backstop.
+  Future<bool> ackMessage({
+    required String queueId,
+    required String messageId,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/q/$queueId/ack/$messageId');
+      final request = await _client.postUrl(uri);
       final response = await request.close();
       await response.drain();
       return response.statusCode == 200;
@@ -57,7 +86,7 @@ class RelayClient {
         final query = (sinceId != null && sinceId.isNotEmpty)
             ? 'since=$sinceId'
             : 'since=all';
-        final uri = Uri.parse('$baseUrl/$queueId/json?$query');
+        final uri = Uri.parse('$baseUrl/q/$queueId/json?$query');
         final request = await _client.getUrl(uri);
         request.persistentConnection = true;
         request.headers.set(HttpHeaders.acceptHeader, 'application/x-ndjson, text/event-stream, */*');
@@ -107,7 +136,7 @@ class RelayClient {
       final query = (sinceId != null && sinceId.isNotEmpty)
           ? 'poll=1&since=$sinceId'
           : 'poll=1&since=all';
-      final uri = Uri.parse('$baseUrl/$queueId/json?$query');
+      final uri = Uri.parse('$baseUrl/q/$queueId/json?$query');
       final request = await _client.getUrl(uri);
       request.persistentConnection = false;
       request.headers.set(HttpHeaders.acceptHeader, '*/*');

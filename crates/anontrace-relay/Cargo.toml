@@ -1,0 +1,8 @@
+[package]
+name = "anontrace-relay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+simple-signal-core = { path = "../simple-signal-core" }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }

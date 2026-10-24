@@ -125,7 +125,8 @@ fn test_two_party_raw_wire_payload_exchange_roundtrip() {
     // 1. Alice gets link & inbox queue
     let alice_link_uri = alice_app.get_my_contact_link().expect("alice link");
     let alice_queue = alice_app.my_inbox_queue_id();
-    assert!(alice_queue.starts_with("anontrace_inbox_"));
+    assert_eq!(alice_queue.len(), 64, "Blind queue id must be 64 hex chars");
+    assert!(alice_queue.chars().all(|c| c.is_ascii_hexdigit()));
 
     // 2. Bob imports Alice's link via import_contact_link_with_handshake
     let (bob_conv, partner_queue, handshake_hex) = bob_app

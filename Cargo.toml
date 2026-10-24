@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/simple-signal-core",
+    "crates/anontrace-relay",
 ]
 resolver = "2"
 

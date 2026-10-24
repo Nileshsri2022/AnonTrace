@@ -20,8 +20,12 @@ aes-gcm = "0.10"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 fips203 = "0.4"
-tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 arti-client = { version = "0.47", default-features = false, features = ["tokio", "rustls", "onion-service-client"] }
+# Direct dep so the core can install a Rustls CryptoProvider before Arti
+# bootstraps; without it Arti panics ("Could not automatically determine
+# the process-level CryptoProvider"). Ring is already in the lockfile.
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
 tor-rtcompat = { version = "0.47", default-features = false, features = ["tokio", "rustls"] }
 regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
