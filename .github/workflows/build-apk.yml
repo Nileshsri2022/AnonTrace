@@ -15,7 +15,46 @@ concurrency:
   group: android-release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-C debuginfo=0"
+
 jobs:
+  verify:
+    name: Verify & Test (Rust & Flutter)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/simple-signal-core -> target
+
+      - name: Test Rust Core
+        working-directory: crates/simple-signal-core
+        run: cargo test --locked
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter Dependencies
+        working-directory: apps/simple_signal_mobile
+        run: flutter pub get
+
+      - name: Run Flutter Tests
+        working-directory: apps/simple_signal_mobile
+        run: flutter test
+
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -65,10 +104,6 @@ jobs:
         if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
         run: cargo install cargo-ndk --locked
 
-      - name: Test Rust Core
-        working-directory: crates/simple-signal-core
-        run: cargo test --locked
-
       - name: Compile Rust Core for Android
         working-directory: crates/simple-signal-core
         run: |
@@ -90,13 +125,9 @@ jobs:
         working-directory: apps/simple_signal_mobile
         run: flutter pub get
 
-      - name: Run Flutter Tests
-        working-directory: apps/simple_signal_mobile
-        run: flutter test
-
       - name: Build Android Release APK
         working-directory: apps/simple_signal_mobile
-        run: flutter build apk --release
+        run: flutter build apk --release -- --build-cache
 
       - name: Verify APK Output
         shell: bash
@@ -122,7 +153,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-latest
 
     # Manual runs build an artifact but do not publish a release.
