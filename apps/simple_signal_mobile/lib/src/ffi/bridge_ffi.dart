@@ -198,11 +198,14 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         calloc.free(cPin);
       }
     } else {
-      // Fallback
+      // Phase 0 (Issue 27): NO fabricated fallback link. The old code
+      // invented a contact link here with shared, hardcoded keys when
+      // the native library failed to load. A contact link is an
+      // identity — inventing one silently is worse than failing.
+      // getMyContactLink() throws in this state (see below).
       await Future.delayed(const Duration(milliseconds: 200));
-      final randomSuffix = DateTime.now().millisecondsSinceEpoch % 100000;
-      _fallbackContactLink =
-          'simplex:/contact#/?v=1&relay=vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion&queue=q_anon_$randomSuffix&auth=1111111111111111111111111111111111111111111111111111111111111111&ik=5696058f86bd9b645b49ec1a996ca25f45ee70a5ed02f98e6f3390857d06acac&idhk=c446bd64a0b22a5c4576ca6ea83f3331c1c6eccc6e811c2773d67ac987b6b465&spkid=1&spk=0c340b19acef708d94106244aba6d02948ba34fb97a2a94dcb3f8521e29f3e1f&sig=e4ddb33ddfefeaebc622f6171f1ce4f7bcb1e7979e814a3caece10b2ca9e7cc04dc210201416a9c4443913a6973ba899ca5d7f2b9e49f8cec77ca611edb1cc0d&otpkid=100&otpk=3040c59ce434f11046eb34b658c68e17a9fc6be6693b556bf7d76e036bf8c95b';
+      _fallbackContactLink = '';
+      AppLogger.warning('FFI', 'Native library not loaded — no contact link available');
     }
   }
 
@@ -368,7 +371,8 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
       throw Exception(json['error'] ?? 'Failed to retrieve contact link');
     }
-    return _fallbackContactLink;
+    // Phase 0 (Issue 27): never return a fabricated link.
+    throw Exception('Native core not loaded — no contact link available');
   }
 
   @override

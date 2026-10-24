@@ -1,0 +1,14 @@
+# Copy this file to "key.properties" (gitignored, never commit it) and
+# fill in a NEW keystore's details. See ADR-0023 § History purge +
+# rotation: the old anontrace.jks + password are compromised forever
+# and must never be used for a production release again.
+#
+# Generate a new keystore on your own machine (never in a shared VM):
+#   keytool -genkeypair -v -keystore new-anontrace.jks -keyalg RSA \
+#     -keysize 2048 -validity 10000 -alias anontrace
+#
+# Placeholder values only — replace every value below.
+storePassword=REPLACE_WITH_NEW_STORE_PASSWORD
+keyPassword=REPLACE_WITH_NEW_KEY_PASSWORD
+keyAlias=anontrace
+storeFile=new-anontrace.jks
