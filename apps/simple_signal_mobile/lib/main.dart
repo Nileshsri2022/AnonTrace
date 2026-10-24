@@ -43,7 +43,7 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen> with WidgetsBindingObserver {
   final SimpleSignalBridge _bridge = createSignalBridge();
   bool _isUnlocked = false;
   final List<ConversationSummary> _conversations = [];
@@ -52,7 +52,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   StreamSubscription<MessageSummary>? _messageStreamSub;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      if (_isUnlocked && mounted) {
+        setState(() {
+          _isUnlocked = false;
+        });
+        AppLogger.info('AUTH', 'App auto-locked on background lifecycle transition');
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _inboxSyncTimer?.cancel();
     _messageStreamSub?.cancel();
     super.dispose();
@@ -131,6 +151,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           onDeleteMessage: (msgId) => _bridge.deleteMessage(msgId),
           onSendMessage: (convId, text) =>
               _bridge.sendChatMessage(conversationId: convId, text: text),
+          onSetDisappearingTimer: (seconds) => _bridge.setDisappearingTimer(
+            conversationId: conv.id,
+            durationSeconds: seconds,
+          ),
           onPollMessages: (convId) =>
               _bridge.receiveMessages(conversationId: convId),
         ),
@@ -247,6 +271,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
+  String _formatPeerTitle(String convId) {
+    if (convId.startsWith('conv_')) {
+      final sub = convId.substring(5);
+      if (sub.length > 12) {
+        return 'Peer ${sub.substring(0, 8)}...';
+      }
+      return 'Peer $sub';
+    }
+    return convId;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_isUnlocked) {
@@ -337,11 +372,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               ),
               itemBuilder: (context, index) {
                 final conv = _conversations[index];
+                final title = _formatPeerTitle(conv.id);
+                final initial = title.startsWith('Peer ') && title.length > 5
+                    ? title.substring(5, 7).toUpperCase()
+                    : conv.id.substring(0, 2).toUpperCase();
                 return ListTile(
                   leading: CircleAvatar(
                     backgroundColor: const Color(0xFF2C6BED),
                     child: Text(
-                      conv.id.substring(0, 2).toUpperCase(),
+                      initial,
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -349,17 +388,54 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                     ),
                   ),
                   title: Text(
-                    conv.id,
+                    title,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                   subtitle: const Text(
-                    'End-to-end encrypted (PQXDH + Double Ratchet)',
+                    'End-to-end encrypted • ML-KEM-1024',
                     style: TextStyle(color: Color(0xFF8E99A4), fontSize: 12),
                   ),
                   onTap: () => _openConversation(conv),
+                  onLongPress: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dialogCtx) => AlertDialog(
+                        backgroundColor: const Color(0xFF1E2630),
+                        title: const Text('Delete Conversation?', style: TextStyle(color: Colors.white)),
+                        content: Text(
+                          'Permanently delete chat history and ratchet sessions with $title?',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogCtx, false),
+                            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogCtx, true),
+                            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && mounted) {
+                      final msgs = await _bridge.listMessages(conv.id);
+                      for (final m in msgs) {
+                        await _bridge.deleteMessage(m.id);
+                      }
+                      setState(() {
+                        _conversations.removeWhere((c) => c.id == conv.id);
+                      });
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Deleted $title')),
+                        );
+                      }
+                    }
+                  },
                 );
               },
             ),

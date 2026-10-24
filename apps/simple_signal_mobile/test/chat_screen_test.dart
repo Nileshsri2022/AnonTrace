@@ -214,6 +214,80 @@ void main() {
     expect(find.byKey(const ValueKey('cancel_reply_btn')), findsNothing);
   });
 
+  testWidgets('ChatScreen send button dynamically toggles enabled/dimmed state and handles quotes cleanly', (WidgetTester tester) async {
+    final now = DateTime.now();
+    final conv = ConversationSummary(
+      id: 'conv_send_test',
+      sendQueueUri: 'https://ntfy.sh/q_send',
+      receiveQueueId: 'q_send_in',
+      createdAt: now.millisecondsSinceEpoch ~/ 1000,
+    );
+
+    final nestedQuoteMsg = MessageSummary(
+      id: 'm_nested',
+      conversationId: 'conv_send_test',
+      direction: 'inbound',
+      bodyText: '[QUOTE:Old Quote snippet]\nActual message content here',
+      timestamp: now.millisecondsSinceEpoch ~/ 1000,
+      status: 'received',
+    );
+
+    String? sentBody;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversation: conv,
+          onFetchMessages: (_) async => [nestedQuoteMsg],
+          onSendMessage: (_, body) async {
+            sentBody = body;
+            return MessageSummary(
+              id: 'm_new',
+              conversationId: 'conv_send_test',
+              direction: 'outbound',
+              bodyText: body,
+              timestamp: now.millisecondsSinceEpoch ~/ 1000,
+              status: 'sent',
+            );
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Verify send button is initially dimmed/disabled
+    final initialIconButton = tester.widget<IconButton>(find.byKey(const ValueKey('send_msg_btn')));
+    expect(initialIconButton.onPressed, isNull);
+
+    // Reply to the message with nested quote
+    await tester.longPress(find.text('Actual message content here'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reply'));
+    await tester.pumpAndSettle();
+
+    // Verify reply preview shows stripped text without "[QUOTE:"
+    expect(find.text('Actual message content here'), findsWidgets);
+    expect(find.textContaining('[QUOTE:'), findsNothing);
+
+    // Type text into input field
+    await tester.enterText(find.byType(TextField), 'My clean reply');
+    await tester.pumpAndSettle();
+
+    // Verify send button is now enabled
+    final enabledIconButton = tester.widget<IconButton>(find.byKey(const ValueKey('send_msg_btn')));
+    expect(enabledIconButton.onPressed, isNotNull);
+
+    // Tap send button
+    await tester.tap(find.byKey(const ValueKey('send_msg_btn')));
+    await tester.pumpAndSettle();
+
+    // Verify sent payload correctly quotes only the mainText without nesting raw tags
+    expect(sentBody, contains('[QUOTE:Actual message content here]'));
+    expect(sentBody, contains('My clean reply'));
+    expect(sentBody, isNot(contains('[QUOTE:[QUOTE:')));
+  });
+
   testWidgets('ChatScreen displays single tick for sent, double grey for delivered, double blue for read', (WidgetTester tester) async {
     final now = DateTime.now();
     final conv = ConversationSummary(

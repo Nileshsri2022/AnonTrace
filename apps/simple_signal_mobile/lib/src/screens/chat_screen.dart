@@ -33,9 +33,11 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _msgController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _focusNode = FocusNode();
   final List<MessageSummary> _messages = [];
   bool _isLoading = true;
   bool _showScrollToBottom = false;
+  bool _canSend = false;
   int _unreadWhileScrolled = 0;
   int _disappearingTimerSeconds = 0;
   MessageSummary? _replyingTo;
@@ -47,9 +49,32 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _disappearingTimerSeconds = widget.initialDisappearingTimer;
     _scrollController.addListener(_onScrollChanged);
+    _msgController.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
     _loadMessages();
     _subscribeToStream();
     _startPolling();
+  }
+
+  void _onTextChanged() {
+    final can = _msgController.text.trim().isNotEmpty;
+    if (can != _canSend) {
+      setState(() => _canSend = can);
+    }
+  }
+
+  void _onFocusChanged() {
+    if (_focusNode.hasFocus) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
   }
 
   void _purgeExpired() {
@@ -81,9 +106,12 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _scrollController.removeListener(_onScrollChanged);
     _scrollController.dispose();
+    _msgController.removeListener(_onTextChanged);
+    _msgController.dispose();
+    _focusNode.removeListener(_onFocusChanged);
+    _focusNode.dispose();
     _streamSub?.cancel();
     _pollTimer?.cancel();
-    _msgController.dispose();
     super.dispose();
   }
 
@@ -180,8 +208,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
 
     final quotedMsg = _replyingTo;
-    final outboundText = quotedMsg != null
-        ? buildQuotedPayload(quotedMsg.bodyText, text)
+    final cleanQuotedText = quotedMsg != null
+        ? parseMessageBody(quotedMsg.bodyText).mainText
+        : null;
+    final outboundText = cleanQuotedText != null
+        ? buildQuotedPayload(cleanQuotedText, text)
         : text;
 
     _msgController.clear();
@@ -259,7 +290,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 title: const Text('Copy Text', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   Navigator.pop(bottomSheetContext);
-                  await Clipboard.setData(ClipboardData(text: msg.bodyText));
+                  final cleanText = parseMessageBody(msg.bodyText).mainText;
+                  await Clipboard.setData(ClipboardData(text: cleanText));
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -606,7 +638,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         ],
                                       ),
                                       child: Column(
-                                        crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           if (parsedBody.quotedSnippet != null)
@@ -643,31 +675,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                             ),
                                           ),
                                           const SizedBox(height: 3),
-                                          Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (bubble.message.expiresAt != null) ...[
-                                                Icon(
-                                                  Icons.timer_outlined,
-                                                  key: const ValueKey('msg_timer_icon'),
-                                                  size: 11,
-                                                  color: isOutbound ? Colors.white60 : Colors.white38,
+                                          Align(
+                                            alignment: Alignment.centerRight,
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                if (bubble.message.expiresAt != null) ...[
+                                                  Icon(
+                                                    Icons.timer_outlined,
+                                                    key: const ValueKey('msg_timer_icon'),
+                                                    size: 11,
+                                                    color: isOutbound ? Colors.white60 : Colors.white38,
+                                                  ),
+                                                  const SizedBox(width: 3),
+                                                ],
+                                                Text(
+                                                  bubble.formattedTime,
+                                                  style: TextStyle(
+                                                    color: isOutbound ? Colors.white70 : Colors.white54,
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w400,
+                                                  ),
                                                 ),
-                                                const SizedBox(width: 3),
+                                                if (isOutbound) ...[
+                                                  const SizedBox(width: 4),
+                                                  _buildStatusTick(bubble.message.status),
+                                                ],
                                               ],
-                                              Text(
-                                                bubble.formattedTime,
-                                                style: TextStyle(
-                                                  color: isOutbound ? Colors.white70 : Colors.white54,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.w400,
-                                                ),
-                                              ),
-                                              if (isOutbound) ...[
-                                                const SizedBox(width: 4),
-                                                _buildStatusTick(bubble.message.status),
-                                              ],
-                                            ],
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -774,7 +809,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _replyingTo!.bodyText,
+                          parseMessageBody(_replyingTo!.bodyText).mainText,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: Colors.white70, fontSize: 13),
@@ -798,6 +833,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Expanded(
                   child: TextField(
                     controller: _msgController,
+                    focusNode: _focusNode,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: 'Message via onion circuit...',
@@ -815,8 +851,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.send_rounded, color: Color(0xFF2C6BED)),
-                  onPressed: _sendMessage,
+                  key: const ValueKey('send_msg_btn'),
+                  icon: Icon(
+                    Icons.send_rounded,
+                    color: _canSend ? const Color(0xFF2C6BED) : Colors.white24,
+                  ),
+                  onPressed: _canSend ? _sendMessage : null,
                 ),
               ],
             ),

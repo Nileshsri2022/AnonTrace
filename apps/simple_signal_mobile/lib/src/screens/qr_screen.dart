@@ -24,6 +24,7 @@ class _QrContactScreenState extends State<QrContactScreen>
   late final MobileScannerController _scannerController;
   bool _useCamera = true;
   bool _isCopied = false;
+  bool _isTorchOn = false;
 
   @override
   void initState() {
@@ -118,6 +119,7 @@ class _QrContactScreenState extends State<QrContactScreen>
         ),
       ),
       body: TabBarView(
+        physics: const NeverScrollableScrollPhysics(),
         controller: _tabController,
         children: [
           // Tab 1: Show My QR Code
@@ -324,6 +326,30 @@ class _QrContactScreenState extends State<QrContactScreen>
                             decoration: BoxDecoration(
                               border: Border.all(color: const Color(0xFF2C6BED), width: 3),
                               borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          Positioned(
+                            top: 16,
+                            right: 16,
+                            child: IconButton(
+                              icon: Icon(
+                                _isTorchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+                                color: _isTorchOn ? Colors.amberAccent : Colors.white,
+                              ),
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.black54,
+                              ),
+                              onPressed: () async {
+                                try {
+                                  await _scannerController.toggleTorch();
+                                  if (mounted) {
+                                    setState(() {
+                                      _isTorchOn = !_isTorchOn;
+                                    });
+                                  }
+                                } catch (_) {}
+                              },
+                              tooltip: 'Toggle Flashlight',
                             ),
                           ),
                           Positioned(
