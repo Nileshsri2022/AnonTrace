@@ -83,3 +83,11 @@ _Avoid_: Read receipt ping, delivery webhook, heartbeat ack
 **Message Status Ticks**:
 Visual delivery indicators rendered in outgoing message bubbles denoting state transitions: Single Grey Tick (`sent`), Double Grey Tick (`delivered`), and Double Blue Tick (`read`).
 _Avoid_: Status icons, progress dots, sent flags
+
+**Ephemeral Message TTL**:
+A time-to-live duration negotiated or configured for a pairwise conversation after which message records and decrypted plaintext are permanently purged from local encrypted storage, leaving zero persistent forensic remnants on physical flash memory.
+_Avoid_: Self-destruct timer, auto-delete flag, expiration interval
+
+**Ephemeral Purge Cycle**:
+An automated atomic sweep executed against local encrypted storage that deletes all message records whose expiration deadline (`expires_at`) has elapsed relative to local time, preserving zero-knowledge forward secrecy without transmitting network tombstone packets.
+_Avoid_: Garbage collection, vacuum job, disk cleanup

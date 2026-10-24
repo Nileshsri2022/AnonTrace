@@ -286,4 +286,44 @@ pub unsafe extern "C" fn simple_signal_update_message_status(
     }
 }
 
+/// Sets the disappearing message duration in seconds for a conversation.
+/// Returns JSON: {"success": true} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_set_disappearing_timer(
+    conv_id_ptr: *const c_char,
+    duration_seconds: i64,
+) -> *mut c_char {
+    let conv_id = match unsafe { to_rust_str(conv_id_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.set_disappearing_timer(conv_id, duration_seconds) {
+        Ok(_) => to_c_string(json!({"success": true}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
+/// Purges all expired messages across all conversations.
+/// Returns JSON: {"success": true, "purged_count": usize} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_purge_expired_messages() -> *mut c_char {
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.purge_expired_messages() {
+        Ok(count) => to_c_string(json!({"success": true, "purged_count": count}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
 

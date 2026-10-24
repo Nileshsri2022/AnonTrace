@@ -277,4 +277,65 @@ void main() {
     expect(deliveredIcon.color, Colors.white70);
     expect(deliveredIcon.icon, Icons.done_all);
   });
+
+  testWidgets('ChatScreen supports disappearing messages timer configuration and renders timer icons', (WidgetTester tester) async {
+    final now = DateTime.now();
+    final conv = ConversationSummary(
+      id: 'conv_ephemeral',
+      sendQueueUri: 'https://ntfy.sh/q_ephemeral',
+      receiveQueueId: 'q_ephemeral_in',
+      createdAt: now.millisecondsSinceEpoch ~/ 1000,
+    );
+
+    final msgEphemeral = MessageSummary(
+      id: 'm_eph',
+      conversationId: 'conv_ephemeral',
+      direction: 'outbound',
+      bodyText: 'Disappearing confidential message',
+      timestamp: now.millisecondsSinceEpoch ~/ 1000,
+      status: 'sent',
+      expiresAt: (now.millisecondsSinceEpoch ~/ 1000) + 3600,
+    );
+
+    int? configuredTimerSeconds;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversation: conv,
+          initialDisappearingTimer: 3600,
+          onFetchMessages: (_) async => [msgEphemeral],
+          onSendMessage: (_, __) async => msgEphemeral,
+          onSetDisappearingTimer: (seconds) async {
+            configuredTimerSeconds = seconds;
+            return true;
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Verify app bar displays 1h timer indicator
+    expect(find.byKey(const ValueKey('appbar_timer_indicator')), findsOneWidget);
+    expect(find.text('1h'), findsOneWidget);
+
+    // Verify message bubble contains timer icon
+    expect(find.byKey(const ValueKey('msg_timer_icon')), findsOneWidget);
+
+    // Open timer menu
+    await tester.tap(find.byKey(const ValueKey('disappearing_timer_menu')));
+    await tester.pumpAndSettle();
+
+    // Select "24 hours"
+    expect(find.text('24 hours'), findsOneWidget);
+    await tester.tap(find.text('24 hours'));
+    await tester.pumpAndSettle();
+
+    // Verify callback was triggered with 86400 seconds
+    expect(configuredTimerSeconds, 86400);
+
+    // Verify indicator updated to 1d (86400s)
+    expect(find.text('1d'), findsOneWidget);
+  });
 }

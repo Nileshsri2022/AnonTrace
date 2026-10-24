@@ -30,6 +30,7 @@ class MessageSummary {
   final String bodyText;
   final int timestamp;
   final String status;
+  final int? expiresAt;
 
   MessageSummary({
     required this.id,
@@ -38,6 +39,7 @@ class MessageSummary {
     required this.bodyText,
     required this.timestamp,
     required this.status,
+    this.expiresAt,
   });
 
   factory MessageSummary.fromJson(Map<String, dynamic> json) {
@@ -48,6 +50,7 @@ class MessageSummary {
       bodyText: json['body_text'] as String,
       timestamp: json['timestamp'] as int,
       status: json['status'] as String,
+      expiresAt: json['expires_at'] as int?,
     );
   }
 }
@@ -63,6 +66,8 @@ abstract class SimpleSignalBridge {
   Future<List<MessageSummary>> listMessages(String conversationId);
   Future<bool> deleteMessage(String messageId);
   Future<bool> updateMessageStatus({required String messageId, required String status});
+  Future<bool> setDisappearingTimer({required String conversationId, required int durationSeconds});
+  Future<int> purgeExpiredMessages();
   Future<List<MessageSummary>> receiveMessages({String? conversationId});
   Future<void> setDormant(bool dormant);
   Future<bool> isActive();

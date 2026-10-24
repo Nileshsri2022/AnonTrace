@@ -10,6 +10,8 @@ class ChatScreen extends StatefulWidget {
   final Future<MessageSummary> Function(String convId, String text) onSendMessage;
   final Future<List<MessageSummary>> Function(String convId)? onPollMessages;
   final Future<bool> Function(String messageId)? onDeleteMessage;
+  final Future<bool> Function(int seconds)? onSetDisappearingTimer;
+  final int initialDisappearingTimer;
   final Stream<MessageSummary>? messageStream;
 
   const ChatScreen({
@@ -19,6 +21,8 @@ class ChatScreen extends StatefulWidget {
     required this.onSendMessage,
     this.onPollMessages,
     this.onDeleteMessage,
+    this.onSetDisappearingTimer,
+    this.initialDisappearingTimer = 0,
     this.messageStream,
   }) : super(key: key);
 
@@ -33,6 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = true;
   bool _showScrollToBottom = false;
   int _unreadWhileScrolled = 0;
+  int _disappearingTimerSeconds = 0;
   MessageSummary? _replyingTo;
   Timer? _pollTimer;
   StreamSubscription<MessageSummary>? _streamSub;
@@ -40,10 +45,36 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _disappearingTimerSeconds = widget.initialDisappearingTimer;
     _scrollController.addListener(_onScrollChanged);
     _loadMessages();
     _subscribeToStream();
     _startPolling();
+  }
+
+  void _purgeExpired() {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final hadExpired = _messages.any((m) => m.expiresAt != null && m.expiresAt! <= now);
+    if (hadExpired && mounted) {
+      setState(() {
+        _messages.removeWhere((m) => m.expiresAt != null && m.expiresAt! <= now);
+      });
+    }
+  }
+
+  String _formatTimerDuration(int seconds) {
+    if (seconds >= 86400) {
+      final days = seconds ~/ 86400;
+      return '${days}d';
+    } else if (seconds >= 3600) {
+      final hours = seconds ~/ 3600;
+      return '${hours}h';
+    } else if (seconds >= 60) {
+      final mins = seconds ~/ 60;
+      return '${mins}m';
+    } else {
+      return '${seconds}s';
+    }
   }
 
   @override
@@ -117,6 +148,7 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages.addAll(msgs);
           });
         }
+        _purgeExpired();
       } catch (_) {}
     });
   }
@@ -159,9 +191,20 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       final sent = await widget.onSendMessage(widget.conversation.id, outboundText);
+      final sentWithExpiry = (sent.expiresAt == null && _disappearingTimerSeconds > 0)
+          ? MessageSummary(
+              id: sent.id,
+              conversationId: sent.conversationId,
+              direction: sent.direction,
+              bodyText: sent.bodyText,
+              timestamp: sent.timestamp,
+              status: sent.status,
+              expiresAt: sent.timestamp + _disappearingTimerSeconds,
+            )
+          : sent;
       if (mounted) {
         setState(() {
-          _messages.add(sent);
+          _messages.add(sentWithExpiry);
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _scrollController.hasClients) {
@@ -316,10 +359,20 @@ class _ChatScreenState extends State<ChatScreen> {
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             Row(
-              children: const [
-                Icon(Icons.lock_outline, size: 12, color: Colors.greenAccent),
-                SizedBox(width: 4),
-                Text(
+              children: [
+                if (_disappearingTimerSeconds > 0) ...[
+                  const Icon(Icons.timer_outlined, size: 10, color: Colors.amberAccent),
+                  const SizedBox(width: 3),
+                  Text(
+                    _formatTimerDuration(_disappearingTimerSeconds),
+                    key: const ValueKey('appbar_timer_indicator'),
+                    style: const TextStyle(fontSize: 10, color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                const Icon(Icons.lock_outline, size: 12, color: Colors.greenAccent),
+                const SizedBox(width: 4),
+                const Text(
                   'ML-KEM-1024 • Double Ratchet • Tor v3',
                   style: TextStyle(fontSize: 10, color: Colors.greenAccent),
                 ),
@@ -327,6 +380,53 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+        actions: [
+          PopupMenuButton<int>(
+            key: const ValueKey('disappearing_timer_menu'),
+            icon: Icon(
+              _disappearingTimerSeconds > 0 ? Icons.timer_rounded : Icons.timer_outlined,
+              color: _disappearingTimerSeconds > 0 ? Colors.amberAccent : Colors.white70,
+            ),
+            tooltip: 'Disappearing Messages',
+            onSelected: (int seconds) async {
+              setState(() {
+                _disappearingTimerSeconds = seconds;
+              });
+              await widget.onSetDisappearingTimer?.call(seconds);
+              if (mounted) {
+                final label = seconds == 0 ? 'off' : _formatTimerDuration(seconds);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Disappearing messages set to $label'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<int>>[
+              const PopupMenuItem<int>(
+                value: 0,
+                child: Text('Off'),
+              ),
+              const PopupMenuItem<int>(
+                value: 300,
+                child: Text('5 minutes'),
+              ),
+              const PopupMenuItem<int>(
+                value: 3600,
+                child: Text('1 hour'),
+              ),
+              const PopupMenuItem<int>(
+                value: 86400,
+                child: Text('24 hours'),
+              ),
+              const PopupMenuItem<int>(
+                value: 604800,
+                child: Text('7 days'),
+              ),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -546,6 +646,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                           Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
+                                              if (bubble.message.expiresAt != null) ...[
+                                                Icon(
+                                                  Icons.timer_outlined,
+                                                  key: const ValueKey('msg_timer_icon'),
+                                                  size: 11,
+                                                  color: isOutbound ? Colors.white60 : Colors.white38,
+                                                ),
+                                                const SizedBox(width: 3),
+                                              ],
                                               Text(
                                                 bubble.formattedTime,
                                                 style: TextStyle(

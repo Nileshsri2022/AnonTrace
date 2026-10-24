@@ -39,6 +39,12 @@ typedef _DeleteMsgDart = Pointer<Utf8> Function(Pointer<Utf8> msgId);
 typedef _UpdateStatusC = Pointer<Utf8> Function(Pointer<Utf8> msgId, Pointer<Utf8> status);
 typedef _UpdateStatusDart = Pointer<Utf8> Function(Pointer<Utf8> msgId, Pointer<Utf8> status);
 
+typedef _SetTimerC = Pointer<Utf8> Function(Pointer<Utf8> convId, Int64 seconds);
+typedef _SetTimerDart = Pointer<Utf8> Function(Pointer<Utf8> convId, int seconds);
+
+typedef _PurgeC = Pointer<Utf8> Function();
+typedef _PurgeDart = Pointer<Utf8> Function();
+
 typedef _RecvMsgC = Pointer<Utf8> Function(Pointer<Utf8> convId);
 typedef _RecvMsgDart = Pointer<Utf8> Function(Pointer<Utf8> convId);
 
@@ -57,6 +63,8 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _ListMsgDart? _listMsgFn;
   _DeleteMsgDart? _deleteMsgFn;
   _UpdateStatusDart? _updateStatusFn;
+  _SetTimerDart? _setTimerFn;
+  _PurgeDart? _purgeFn;
   _RecvMsgDart? _recvMsgFn;
   _FreeStringDart? _freeStringFn;
 
@@ -73,6 +81,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   bool _isNativeLoaded = false;
   final List<ConversationSummary> _fallbackConversations = [];
   final Map<String, List<MessageSummary>> _fallbackMessages = {};
+  final Map<String, int> _fallbackDisappearingTimers = {};
   String _fallbackContactLink = '';
 
   NativeSimpleSignalBridge() {
@@ -102,6 +111,8 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _listMsgFn = _dylib!.lookupFunction<_ListMsgC, _ListMsgDart>('simple_signal_list_messages');
         _deleteMsgFn = _dylib!.lookupFunction<_DeleteMsgC, _DeleteMsgDart>('simple_signal_delete_message');
         _updateStatusFn = _dylib!.lookupFunction<_UpdateStatusC, _UpdateStatusDart>('simple_signal_update_message_status');
+        _setTimerFn = _dylib!.lookupFunction<_SetTimerC, _SetTimerDart>('simple_signal_set_disappearing_timer');
+        _purgeFn = _dylib!.lookupFunction<_PurgeC, _PurgeDart>('simple_signal_purge_expired_messages');
         _recvMsgFn = _dylib!.lookupFunction<_RecvMsgC, _RecvMsgDart>('simple_signal_receive_messages');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
@@ -298,13 +309,16 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         calloc.free(cText);
       }
     } else {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final timer = _fallbackDisappearingTimers[conversationId] ?? 0;
       final msg = MessageSummary(
         id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
         conversationId: conversationId,
         direction: 'outbound',
         bodyText: text,
-        timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        timestamp: now,
         status: 'sent',
+        expiresAt: timer > 0 ? now + timer : null,
       );
       _fallbackMessages.putIfAbsent(conversationId, () => []).add(msg);
       return msg;
@@ -398,6 +412,40 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
       }
     }
     return false;
+  }
+
+  @override
+  Future<bool> setDisappearingTimer({required String conversationId, required int durationSeconds}) async {
+    AppLogger.ffi('simple_signal_set_disappearing_timer', 'Setting timer for $conversationId to ${durationSeconds}s');
+    _fallbackDisappearingTimers[conversationId] = durationSeconds;
+    if (_isNativeLoaded && _setTimerFn != null) {
+      final cConvId = conversationId.toNativeUtf8();
+      try {
+        final resPtr = _setTimerFn!(cConvId, durationSeconds);
+        final json = _parseAndFree(resPtr);
+        return json['success'] == true;
+      } finally {
+        calloc.free(cConvId);
+      }
+    }
+    return true;
+  }
+
+  @override
+  Future<int> purgeExpiredMessages() async {
+    int nativeCount = 0;
+    if (_isNativeLoaded && _purgeFn != null) {
+      final resPtr = _purgeFn!();
+      final json = _parseAndFree(resPtr);
+      if (json['success'] == true && json['purged_count'] != null) {
+        nativeCount = json['purged_count'] as int;
+      }
+    }
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final list in _fallbackMessages.values) {
+      list.removeWhere((m) => m.expiresAt != null && m.expiresAt! <= now);
+    }
+    return nativeCount;
   }
 
   @override

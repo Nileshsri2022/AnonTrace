@@ -142,3 +142,4 @@ All data dispatched over the HTTPS relay is framed with an 8-bit command header:
 | **Physical Device Seizure (Locked)** | Database is encrypted with Argon2id 256-bit AES key; keying material only exists in volatile RAM while unlocked. |
 | **Memory / Log Leakage** | `LogScrubber` regex engine strips Master PINs, private keys, and auth headers from all log streams. 500-entry ring buffer is never persisted to disk. |
 | **Quantum Adversary ("Harvest Now, Decrypt Later")** | Hybrid PQXDH incorporates FIPS 203 ML-KEM-1024 post-quantum key encapsulation alongside X25519. |
+| **Physical Forensic Analysis (Unlocked Extraction)** | Ephemeral Message TTL purges plaintext records atomically from encrypted SQLite on expiration, leaving no reconstructible blocks. |

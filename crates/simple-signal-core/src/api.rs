@@ -317,6 +317,9 @@ impl SimpleSignalApp {
         })?;
 
         let msg_id = format!("msg_{}", nanos);
+        let timer = self.db.get_disappearing_timer(conversation_id).unwrap_or(0);
+        let expires_at = if timer > 0 { Some(now + timer) } else { None };
+
         let record = MessageRecord {
             id: msg_id.clone(),
             conversation_id: conversation_id.to_string(),
@@ -324,6 +327,7 @@ impl SimpleSignalApp {
             body: text.as_bytes().to_vec(),
             timestamp: now,
             status: "sent".to_string(),
+            expires_at,
         };
 
         self.db.insert_message(&record)?;
@@ -419,6 +423,9 @@ impl SimpleSignalApp {
                 if let Some(session) = sessions.get_mut(&conv_id) {
                     if let Ok(plaintext_bytes) = session.decrypt(ciphertext) {
                         if let Ok(plaintext) = String::from_utf8(plaintext_bytes) {
+                            let timer = self.db.get_disappearing_timer(&conv_id).unwrap_or(0);
+                            let expires_at = if timer > 0 { Some(now + timer) } else { None };
+
                             let record = MessageRecord {
                                 id: msg_id,
                                 conversation_id: conv_id.clone(),
@@ -426,6 +433,7 @@ impl SimpleSignalApp {
                                 body: plaintext.as_bytes().to_vec(),
                                 timestamp: now,
                                 status: "received".to_string(),
+                                expires_at,
                             };
 
                             let _ = self.db.insert_message(&record);
@@ -521,10 +529,34 @@ impl SimpleSignalApp {
         Ok(list.into_iter().map(ConversationSummary::from).collect())
     }
 
-    /// Lists all messages in a conversation.
+    /// Lists all messages in a conversation (automatically purges expired ones).
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<MessageSummary>, FfiError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let _ = self.db.purge_expired_messages(now);
         let list = self.db.list_messages(conversation_id)?;
         Ok(list.into_iter().map(MessageSummary::from).collect())
+    }
+
+    /// Sets disappearing timer in seconds for a conversation.
+    pub fn set_disappearing_timer(&self, conversation_id: &str, seconds: i64) -> Result<(), FfiError> {
+        Ok(self.db.set_disappearing_timer(conversation_id, seconds)?)
+    }
+
+    /// Gets disappearing timer in seconds for a conversation.
+    pub fn get_disappearing_timer(&self, conversation_id: &str) -> Result<i64, FfiError> {
+        Ok(self.db.get_disappearing_timer(conversation_id)?)
+    }
+
+    /// Explicitly purges all expired messages across all conversations.
+    pub fn purge_expired_messages(&self) -> Result<usize, FfiError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        Ok(self.db.purge_expired_messages(now)?)
     }
 
     /// Deletes a single message by ID from local storage.

@@ -93,3 +93,12 @@ simplex:/contact#/?v=1&relay=<relay_onion_or_https>&queue=<queue_id>&auth=<auth_
 - **In-Band Quoted Replies**: Messages can reference prior utterances via `[QUOTE:snippet]\ntext` payload encapsulation, rendering contextual quote cards in bubbles with zero metadata leakage to network relays.
 - **Client-Side Privacy**: Timeline grouping operates purely in the presentation layer with zero network transmission, zero relay disclosure, and zero alteration of post-quantum cryptographic primitives.
 
+---
+
+## 7. Ephemeral Message TTL & Disappearing Messages
+
+- **Storage Schema**: The `messages` table includes `expires_at INTEGER DEFAULT NULL` and `conversations` includes `disappearing_timer_seconds INTEGER DEFAULT 0`.
+- **Ephemeral Purge**: An automatic sweep query (`DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1`) atomically purges expired records from encrypted SQLite storage.
+- **Configurable Intervals**: Supports Off (0s), 5 Minutes (300s), 1 Hour (3600s), 24 Hours (86400s), and 7 Days (604800s).
+- **Zero-Knowledge Transport**: Transport relays carry zero metadata regarding message TTL; purge operations execute completely client-side in local encrypted storage.
+

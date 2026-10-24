@@ -124,6 +124,7 @@ pub struct MessageRecord {
     pub body: Vec<u8>,
     pub timestamp: i64,
     pub status: String,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -228,7 +229,8 @@ impl EncryptedDatabase {
                 receive_queue_id TEXT NOT NULL,
                 relay_onion_address TEXT NOT NULL,
                 sender_auth_key BLOB NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                disappearing_timer_seconds INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -244,10 +246,14 @@ impl EncryptedDatabase {
                 direction TEXT NOT NULL,
                 body BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
-                status TEXT NOT NULL
+                status TEXT NOT NULL,
+                expires_at INTEGER DEFAULT NULL
             );
             "#
         )?;
+
+        let _ = conn.execute_batch("ALTER TABLE conversations ADD COLUMN disappearing_timer_seconds INTEGER DEFAULT 0;");
+        let _ = conn.execute_batch("ALTER TABLE messages ADD COLUMN expires_at INTEGER DEFAULT NULL;");
 
         Ok(())
     }
@@ -370,15 +376,16 @@ impl EncryptedDatabase {
     pub fn insert_message(&self, record: &MessageRecord) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO messages (id, conversation_id, direction, body, timestamp, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            "INSERT INTO messages (id, conversation_id, direction, body, timestamp, status, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
             params![
                 record.id,
                 record.conversation_id,
                 record.direction,
                 record.body,
                 record.timestamp,
-                record.status
+                record.status,
+                record.expires_at
             ],
         )?;
         Ok(())
@@ -440,7 +447,7 @@ impl EncryptedDatabase {
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<MessageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, direction, body, timestamp, status
+            "SELECT id, conversation_id, direction, body, timestamp, status, expires_at
              FROM messages WHERE conversation_id = ?1 ORDER BY timestamp ASC;",
         )?;
         let rows = stmt.query_map(params![conversation_id], |row| {
@@ -451,6 +458,7 @@ impl EncryptedDatabase {
                 body: row.get(3)?,
                 timestamp: row.get(4)?,
                 status: row.get(5)?,
+                expires_at: row.get(6)?,
             })
         })?;
         let mut list = Vec::new();
@@ -458,5 +466,40 @@ impl EncryptedDatabase {
             list.push(r?);
         }
         Ok(list)
+    }
+
+    /// Sets the disappearing messages duration in seconds for a conversation (0 to disable)
+    pub fn set_disappearing_timer(&self, conversation_id: &str, seconds: i64) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET disappearing_timer_seconds = ?1 WHERE id = ?2;",
+            params![seconds, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    /// Gets the disappearing messages duration in seconds for a conversation
+    pub fn get_disappearing_timer(&self, conversation_id: &str) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let timer: rusqlite::Result<i64> = conn.query_row(
+            "SELECT disappearing_timer_seconds FROM conversations WHERE id = ?1;",
+            params![conversation_id],
+            |row| row.get(0),
+        );
+        match timer {
+            Ok(t) => Ok(t),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(StorageError::DatabaseError(e.to_string())),
+        }
+    }
+
+    /// Purges all expired messages whose expires_at is less than or equal to current_timestamp
+    pub fn purge_expired_messages(&self, current_timestamp: i64) -> Result<usize, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1;",
+            params![current_timestamp],
+        )?;
+        Ok(rows)
     }
 }

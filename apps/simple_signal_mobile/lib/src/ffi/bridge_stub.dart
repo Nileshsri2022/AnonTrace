@@ -8,6 +8,7 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   final StreamController<MessageSummary> _stubStreamController = StreamController<MessageSummary>.broadcast();
   final List<ConversationSummary> _conversations = [];
   final Map<String, List<MessageSummary>> _messages = {};
+  final Map<String, int> _disappearingTimers = {};
   String _contactLink = '';
 
   @override
@@ -50,13 +51,16 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
     required String text,
   }) async {
     AppLogger.info('WEB_BRIDGE', 'sendChatMessage to $conversationId');
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final timer = _disappearingTimers[conversationId] ?? 0;
     final msg = MessageSummary(
       id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
       conversationId: conversationId,
       direction: 'outbound',
       bodyText: text,
-      timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      timestamp: now,
       status: 'sent',
+      expiresAt: timer > 0 ? now + timer : null,
     );
     _messages.putIfAbsent(conversationId, () => []).add(msg);
     return msg;
@@ -69,6 +73,7 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<List<MessageSummary>> listMessages(String conversationId) async {
+    await purgeExpiredMessages();
     return List.unmodifiable(_messages[conversationId] ?? []);
   }
 
@@ -97,11 +102,30 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
           bodyText: old.bodyText,
           timestamp: old.timestamp,
           status: status,
+          expiresAt: old.expiresAt,
         );
         return true;
       }
     }
     return false;
+  }
+
+  @override
+  Future<bool> setDisappearingTimer({required String conversationId, required int durationSeconds}) async {
+    _disappearingTimers[conversationId] = durationSeconds;
+    return true;
+  }
+
+  @override
+  Future<int> purgeExpiredMessages() async {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    int purged = 0;
+    for (final list in _messages.values) {
+      final initialLen = list.length;
+      list.removeWhere((m) => m.expiresAt != null && m.expiresAt! <= now);
+      purged += (initialLen - list.length);
+    }
+    return purged;
   }
 
   @override
