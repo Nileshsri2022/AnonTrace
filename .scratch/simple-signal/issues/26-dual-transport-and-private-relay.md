@@ -2,7 +2,7 @@
 
 | Property | Value |
 | :--- | :--- |
-| **Status** | Partially implemented 2026-10-24 — Tickets 26.1 + 26.2 + 26.3 (bootstrap + onion post) done and tested; 26.3 remainder (exit fallback, bridges, Stealth send wiring) + 26.4 (foreground task) still pending, see §8. All Option B code local only, merge together later per user instruction — NOT pushed, NOT in PR #2 |
+| **Status** | Implemented 2026-10-24 (PR #3 merged `ed76e28`); completion PR #4 adds 26.3 remainder (exit fallback, plain bridges, Stealth toggle + send wiring) and 26.4 first step (60 s background poll). Still pending, see §8: Snowflake/WebTunnel bridges (pt-client), foreground service (app-killed case), relay + onion deployment, real-device verification. |
 | **Type** | Transport / metadata-privacy feature |
 | **Target** | Flutter `lib/src/net/relay_client.dart`, `lib/src/ffi/bridge_ffi.dart`; Rust `crates/simple-signal-core/src/net/`; new relay service (see §3) |
 | **Framework Skill** | `ask-matt` (docs-first flow: issue → ADR → tickets → implement) |
@@ -303,15 +303,31 @@ for the default path by ADR-0022.
   Bootstrapping (direct Tor is blocked by the VM proxy) — bootstrap
   code is proven to run, full bootstrap to Ready needs a real
   device / unproxied network.
-- **Not yet done:** 26.3 remainder — HTTPS-over-Tor-exit fallback
-  (needs tokio-rustls + webpki-roots, new deps, not yet added;
-  Stealth currently fails closed with no onion, never downgrades
-  to clearnet), bridges (Snowflake/WebTunnel, needs pt-client
-  feature, not enabled), Stealth send wired into the main Flutter
-  send path (needs a non-blocking FFI job, current
-  `stealth_post_blocking` blocks the calling thread), and 26.4
-  foreground task + 30 s heartbeat (dependency already in pubspec,
-  not wired up). All need real-device verification.
+- **Done 2026-10-24 (completion, PR #4):** Stealth toggle UI
+  (AppBar visibility icon + diagnostics shows mode + stealth
+  status), Stealth send wired into the Flutter send path
+  (chat messages + handshake import use `stealthSend` when mode
+  is `stealth`; Stealth failure does NOT fall back to clearnet),
+  HTTPS-over-Tor-exit fallback (`stealth_post_with_fallback` —
+  onion first, then TLS over a Tor exit to `relay.anontrace.app`
+  via tokio-rustls + webpki-roots, never clearnet Flutter HTTP),
+  plain Tor bridges (`start_stealth_bootstrap_with_bridges`,
+  Arti `bridge-client` feature; FFI + Dart `bridgeLines` param),
+  and 26.4 first step — a 60 s background poll timer that runs
+  even when the UI is locked/backgrounded and stores messages
+  in the DB. Verified: `cargo test --locked` 55/55 (54 + 1 new
+  exit-fallback fails-closed test). Dart changes are **not**
+  verified in this VM (no Flutter/Dart SDK) — run
+  `flutter analyze` + `flutter test` before merging.
+- **Not yet done:** Snowflake/WebTunnel bridges (needs Arti
+  `pt-client` feature + transport binary, not enabled), a true
+  foreground service for the app-killed case (the 60 s poll only
+  helps while the app is backgrounded, not killed;
+  `flutter_foreground_task` is in pubspec but unwired), a
+  non-blocking Stealth send job (current Stealth send blocks
+  the Dart isolate for the Tor request — slow by design, but
+  the UI will stall on that send), relay + onion deployment,
+  and all real-device verification.
 - **Deployment placeholder:** default relay URL is
   `https://relay.anontrace.app` in both Rust (`DEFAULT_RELAY_URL`)
   and Dart. No such service is deployed yet; Normal Mode will fail

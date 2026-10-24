@@ -49,6 +49,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   final List<ConversationSummary> _conversations = [];
   String _myContactLink = '';
   Timer? _inboxSyncTimer;
+  Timer? _backgroundPollTimer;
   StreamSubscription<MessageSummary>? _messageStreamSub;
 
   @override
@@ -74,6 +75,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _inboxSyncTimer?.cancel();
+    _backgroundPollTimer?.cancel();
     _messageStreamSub?.cancel();
     super.dispose();
   }
@@ -93,6 +95,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
             _conversations.addAll(updatedConvs);
           });
         }
+      } catch (_) {}
+    });
+
+    // 2b. Background poll fallback (60 seconds, Ticket 26.4 first step):
+    // Runs even when the UI is locked/backgrounded (not when the app is
+    // killed — that still needs a foreground service, see Issue 26 §8).
+    // It only polls the relay and stores messages in the DB; the UI
+    // shows them after unlock.
+    _backgroundPollTimer?.cancel();
+    _backgroundPollTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
+      if (!mounted) return;
+      try {
+        await _bridge.receiveMessages();
       } catch (_) {}
     });
 
@@ -196,8 +211,36 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     );
   }
 
+  Future<void> _toggleStealth() async {
+    final mode = await _bridge.getTransportMode();
+    if (mode == 'stealth') {
+      await _bridge.setTransportMode('normal');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Stealth off — Normal Mode (HTTPS private relay)')),
+        );
+      }
+      return;
+    }
+    await _bridge.setTransportMode('stealth');
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      await _bridge.startStealthBootstrap(dataDir: appDir.path);
+    } catch (_) {}
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Stealth on — Arti bootstrap started. Check Security Status for progress. Onion relay must be deployed for Stealth sends to work.')),
+      );
+    }
+  }
+
   void _showDiagnosticsDialog() async {
     final isNative = await _bridge.isActive();
+    final mode = await _bridge.getTransportMode();
+    final stealth = _bridge.getStealthStatus();
+    final stealthText = stealth == null
+        ? 'Not started'
+        : '${stealth['state']} (frac: ${stealth['frac']}, ready: ${stealth['ready']})';
     if (!mounted) return;
     showDialog(
       context: context,
@@ -222,6 +265,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
             _diagRow('Local Storage', 'SQLCipher AES-256-GCM (Encrypted at Rest)', Colors.greenAccent),
             const SizedBox(height: 12),
             _diagRow('Transport Layer', 'Normal: HTTPS 443 Private Relay (Stealth: Tor opt-in)', Colors.greenAccent),
+            const SizedBox(height: 12),
+            _diagRow('Transport Mode', mode ?? 'unknown', Colors.greenAccent),
+            const SizedBox(height: 12),
+            _diagRow('Stealth Status', stealthText, Colors.greenAccent),
             const SizedBox(height: 12),
             _diagRow('Cryptographic Ratchet', 'PQXDH (ML-KEM-1024 + X25519)', Colors.greenAccent),
             const SizedBox(height: 12),
@@ -323,6 +370,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
             icon: const Icon(Icons.info_outline_rounded, color: Colors.white70),
             tooltip: 'Security Status',
             onPressed: _showDiagnosticsDialog,
+          ),
+          IconButton(
+            icon: const Icon(Icons.visibility_off_rounded, color: Colors.white70),
+            tooltip: 'Toggle Stealth Mode (Tor)',
+            onPressed: _toggleStealth,
           ),
           IconButton(
             icon: const Icon(Icons.qr_code_2_rounded),

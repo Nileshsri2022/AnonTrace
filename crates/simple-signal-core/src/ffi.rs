@@ -392,6 +392,51 @@ pub unsafe extern "C" fn simple_signal_start_stealth_bootstrap(
     }
 }
 
+/// Starts Stealth bootstrap with plain bridge lines (newline-separated).
+/// Returns JSON: {"success": true} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_start_stealth_bootstrap_with_bridges(
+    data_dir_ptr: *const c_char,
+    onion_ptr: *const c_char,
+    bridges_ptr: *const c_char,
+) -> *mut c_char {
+    let data_dir = match unsafe { to_rust_str(data_dir_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let onion_str = if onion_ptr.is_null() {
+        ""
+    } else {
+        match unsafe { to_rust_str(onion_ptr) } {
+            Ok(s) => s,
+            Err(_) => return to_c_string(json!({"success": false, "error": "Invalid onion address"}).to_string()),
+        }
+    };
+    let onion = if onion_str.is_empty() { None } else { Some(onion_str.to_string()) };
+    let bridges_str = if bridges_ptr.is_null() {
+        ""
+    } else {
+        match unsafe { to_rust_str(bridges_ptr) } {
+            Ok(s) => s,
+            Err(_) => return to_c_string(json!({"success": false, "error": "Invalid bridges"}).to_string()),
+        }
+    };
+    let bridge_lines: Vec<String> = bridges_str
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    match app.start_stealth_bootstrap_with_bridges(data_dir, onion, &bridge_lines) {
+        Ok(()) => to_c_string(json!({"success": true}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
 /// Returns the current Stealth bootstrap status.
 /// Returns JSON: {"success": true, "state": "...", "frac": 0.0, "ready": false, "blocked": null, "onion": null} or error.
 #[unsafe(no_mangle)]
@@ -424,6 +469,37 @@ pub extern "C" fn simple_signal_get_stealth_status() -> *mut c_char {
         })
         .to_string(),
     )
+}
+
+/// Sends a relay POST over Stealth (onion), blocking the caller.
+/// Returns JSON: {"success": true, "body": "..."} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_stealth_send(
+    queue_ptr: *const c_char,
+    auth_ptr: *const c_char,
+    payload_ptr: *const c_char,
+) -> *mut c_char {
+    let queue_id = match unsafe { to_rust_str(queue_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let auth_hex = match unsafe { to_rust_str(auth_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let payload_hex = match unsafe { to_rust_str(payload_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+    match app.stealth_send(queue_id, auth_hex, payload_hex) {
+        Ok(body) => to_c_string(json!({"success": true, "body": body}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
 }
 
 /// Returns the current transport mode.
