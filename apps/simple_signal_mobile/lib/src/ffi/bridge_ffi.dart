@@ -60,8 +60,14 @@ typedef _GetTransportModeDart = Pointer<Utf8> Function();
 typedef _StartStealthC = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion);
 typedef _StartStealthDart = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion);
 
+typedef _StartStealthBridgesC = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion, Pointer<Utf8> bridges);
+typedef _StartStealthBridgesDart = Pointer<Utf8> Function(Pointer<Utf8> dataDir, Pointer<Utf8> onion, Pointer<Utf8> bridges);
+
 typedef _GetStealthStatusC = Pointer<Utf8> Function();
 typedef _GetStealthStatusDart = Pointer<Utf8> Function();
+
+typedef _StealthSendC = Pointer<Utf8> Function(Pointer<Utf8> queueId, Pointer<Utf8> senderAuthHex, Pointer<Utf8> payloadHex);
+typedef _StealthSendDart = Pointer<Utf8> Function(Pointer<Utf8> queueId, Pointer<Utf8> senderAuthHex, Pointer<Utf8> payloadHex);
 
 typedef _FreeStringC = Void Function(Pointer<Utf8> ptr);
 typedef _FreeStringDart = void Function(Pointer<Utf8> ptr);
@@ -85,7 +91,9 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   _SetTransportModeDart? _setTransportModeFn;
   _GetTransportModeDart? _getTransportModeFn;
   _StartStealthDart? _startStealthFn;
+  _StartStealthBridgesDart? _startStealthBridgesFn;
   _GetStealthStatusDart? _getStealthStatusFn;
+  _StealthSendDart? _stealthSendFn;
   _FreeStringDart? _freeStringFn;
 
   final RelayClient _relayClient = RelayClient();
@@ -138,7 +146,9 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
         _setTransportModeFn = _dylib!.lookupFunction<_SetTransportModeC, _SetTransportModeDart>('simple_signal_set_transport_mode');
         _getTransportModeFn = _dylib!.lookupFunction<_GetTransportModeC, _GetTransportModeDart>('simple_signal_get_transport_mode');
         _startStealthFn = _dylib!.lookupFunction<_StartStealthC, _StartStealthDart>('simple_signal_start_stealth_bootstrap');
+        _startStealthBridgesFn = _dylib!.lookupFunction<_StartStealthBridgesC, _StartStealthBridgesDart>('simple_signal_start_stealth_bootstrap_with_bridges');
         _getStealthStatusFn = _dylib!.lookupFunction<_GetStealthStatusC, _GetStealthStatusDart>('simple_signal_get_stealth_status');
+        _stealthSendFn = _dylib!.lookupFunction<_StealthSendC, _StealthSendDart>('simple_signal_stealth_send');
         _freeStringFn = _dylib!.lookupFunction<_FreeStringC, _FreeStringDart>('simple_signal_free_string');
 
         _isNativeLoaded = true;
@@ -270,12 +280,18 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
   /// Returns immediately; poll [getStealthStatus] for progress. Never
   /// routes traffic through Flutter HttpClient SOCKS — Stealth traffic
   /// goes through the Rust Arti client only.
-  Future<bool> startStealthBootstrap({required String dataDir, String? onionAddress}) async {
-    if (!_isNativeLoaded || _startStealthFn == null) return false;
+  Future<bool> startStealthBootstrap({required String dataDir, String? onionAddress, String? bridgeLines}) async {
+    if (!_isNativeLoaded) return false;
     final cDir = dataDir.toNativeUtf8();
     final cOnion = (onionAddress ?? '').toNativeUtf8();
+    final cBridges = (bridgeLines ?? '').toNativeUtf8();
     try {
-      final resPtr = _startStealthFn!(cDir, cOnion);
+      final resPtr = (bridgeLines != null && bridgeLines.isNotEmpty && _startStealthBridgesFn != null)
+          ? _startStealthBridgesFn!(cDir, cOnion, cBridges)
+          : _startStealthFn != null
+              ? _startStealthFn!(cDir, cOnion)
+              : null;
+      if (resPtr == null) return false;
       final json = _parseAndFree(resPtr);
       return json['success'] == true;
     } catch (_) {
@@ -283,6 +299,7 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
     } finally {
       calloc.free(cDir);
       calloc.free(cOnion);
+      calloc.free(cBridges);
     }
   }
 
@@ -293,6 +310,51 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
     final json = _parseAndFree(resPtr);
     if (json['success'] == true) return json;
     return null;
+  }
+
+  @override
+  Future<bool> setTransportMode(String mode) async {
+    if (!_isNativeLoaded || _setTransportModeFn == null) return false;
+    final cMode = mode.toNativeUtf8();
+    try {
+      final resPtr = _setTransportModeFn!(cMode);
+      final json = _parseAndFree(resPtr);
+      return json['success'] == true;
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(cMode);
+    }
+  }
+
+  @override
+  Future<String?> getTransportMode() async {
+    if (!_isNativeLoaded || _getTransportModeFn == null) return null;
+    final resPtr = _getTransportModeFn!();
+    final json = _parseAndFree(resPtr);
+    if (json['success'] == true && json['mode'] != null) {
+      return json['mode'] as String;
+    }
+    return null;
+  }
+
+  @override
+  Future<bool> stealthSend({required String queueId, required String senderAuthHex, required String payloadHex}) async {
+    if (!_isNativeLoaded || _stealthSendFn == null) return false;
+    final cQueue = queueId.toNativeUtf8();
+    final cAuth = senderAuthHex.toNativeUtf8();
+    final cPayload = payloadHex.toNativeUtf8();
+    try {
+      final resPtr = _stealthSendFn!(cQueue, cAuth, cPayload);
+      final json = _parseAndFree(resPtr);
+      return json['success'] == true;
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(cQueue);
+      calloc.free(cAuth);
+      calloc.free(cPayload);
+    }
   }
 
   @override
@@ -325,7 +387,13 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
             try {
               final convId = (json['conversation'] as Map<String, dynamic>)['id'] as String?;
               final senderAuth = convId != null ? _senderAuthForConversation(convId) : null;
-              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: handshakeHex, senderAuthHex: senderAuth);
+              final mode = await getTransportMode();
+              final bool ok;
+              if (mode == 'stealth' && senderAuth != null) {
+                ok = await stealthSend(queueId: partnerQueue, senderAuthHex: senderAuth, payloadHex: handshakeHex);
+              } else {
+                ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: handshakeHex, senderAuthHex: senderAuth);
+              }
               if (ok) {
                 AppLogger.info('Relay', 'Handshake payload dispatched to relay queue: $partnerQueue');
               } else {
@@ -369,7 +437,16 @@ class NativeSimpleSignalBridge implements SimpleSignalBridge {
           if (partnerQueue != null && partnerQueue.isNotEmpty && payloadHex != null && payloadHex.isNotEmpty) {
             try {
               final senderAuth = _senderAuthForConversation(conversationId);
-              final ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: payloadHex, senderAuthHex: senderAuth);
+              final mode = await getTransportMode();
+              final bool ok;
+              if (mode == 'stealth' && senderAuth != null) {
+                // Stealth send via Rust Arti (onion). Blocks the isolate
+                // for the Tor request — Stealth sends are expected to be
+                // slow; do not fall back to clearnet on failure.
+                ok = await stealthSend(queueId: partnerQueue, senderAuthHex: senderAuth, payloadHex: payloadHex);
+              } else {
+                ok = await _relayClient.sendPayload(queueId: partnerQueue, payloadHex: payloadHex, senderAuthHex: senderAuth);
+              }
               if (ok) {
                 AppLogger.info('Relay', 'Encrypted payload dispatched to relay queue: $partnerQueue');
               } else {

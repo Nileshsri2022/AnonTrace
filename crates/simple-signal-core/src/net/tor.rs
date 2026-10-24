@@ -171,6 +171,21 @@ impl TorClientManager {
         data_dir: &Path,
         onion_address: Option<String>,
     ) -> Result<(), TorError> {
+        self.start_stealth_bootstrap_with_bridges(data_dir, onion_address, &[])
+    }
+
+    /// Like `start_stealth_bootstrap`, plus plain Tor bridge lines
+    /// (e.g. `Bridge 1.2.3.4:9001 <fingerprint>`). Plain bridges do not
+    /// need a pluggable transport. Snowflake/WebTunnel bridges need the
+    /// `pt-client` Arti feature and a transport binary, which is NOT
+    /// enabled here — those lines will fail to parse/use and must not
+    /// be passed to this function.
+    pub fn start_stealth_bootstrap_with_bridges(
+        &self,
+        data_dir: &Path,
+        onion_address: Option<String>,
+        bridge_lines: &[String],
+    ) -> Result<(), TorError> {
         if let Some(onion) = &onion_address {
             validate_onion_address(onion)?;
         }
@@ -194,6 +209,7 @@ impl TorClientManager {
         let manager = self.clone();
         let state_dir = data_dir.join("tor_state");
         let cache_dir = data_dir.join("tor_cache");
+        let bridge_lines_owned: Vec<String> = bridge_lines.to_vec();
         runtime.spawn(async move {
             let result = async {
                 // Arti + rustls panics without a process-level CryptoProvider.
@@ -201,11 +217,18 @@ impl TorClientManager {
                 let _ = rustls::crypto::CryptoProvider::install_default(
                     rustls::crypto::ring::default_provider(),
                 );
-                let config = arti_client::config::TorClientConfigBuilder::from_directories(
+                let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(
                     &state_dir, &cache_dir,
-                )
-                .build()
-                .map_err(|e| TorError::ConfigError(e.to_string()))?;
+                );
+                for line in &bridge_lines_owned {
+                    let bridge: arti_client::config::BridgeConfigBuilder = line
+                        .parse()
+                        .map_err(|e| TorError::ConfigError(format!("Invalid bridge line: {}", e)))?;
+                    builder.bridges().bridges().push(bridge);
+                }
+                let config = builder
+                    .build()
+                    .map_err(|e| TorError::ConfigError(e.to_string()))?;
                 // Unbootstrapped first, so status polling can see frac/blocked.
                 let client = arti_client::TorClient::builder()
                     .config(config)
@@ -330,6 +353,117 @@ impl TorClientManager {
 }
 
 impl TorClientManager {
+    /// Onion-first, Tor-exit fallback for a Stealth relay POST.
+    /// 1. If an onion address is configured, try it first (HTTP over onion).
+    /// 2. On onion failure (or no onion), try HTTPS over a Tor exit to
+    ///    `relay_host:443` (TLS via tokio-rustls + webpki-roots).
+    /// Never falls back to clearnet Flutter HttpClient — both paths go
+    /// through Arti, so the user's IP stays hidden from the relay in
+    /// either case (the exit sees ciphertext + blind id, not the IP).
+    pub async fn stealth_post_with_fallback(
+        &self,
+        queue_id: &str,
+        sender_auth_hex: &str,
+        payload_hex: &str,
+        relay_host: &str,
+    ) -> Result<String, TorError> {
+        // Onion first, if configured.
+        let onion_result = {
+            let inner = self.inner.lock().unwrap();
+            inner.onion_address.is_some()
+        };
+        if onion_result {
+            match self.stealth_post(queue_id, sender_auth_hex, payload_hex).await {
+                Ok(body) => return Ok(body),
+                Err(_) => {
+                    // Fall through to exit fallback below.
+                }
+            }
+        }
+        if relay_host.is_empty() {
+            return Err(TorError::NoOnionAddress);
+        }
+        self.stealth_post_via_exit(queue_id, sender_auth_hex, payload_hex, relay_host)
+            .await
+    }
+
+    /// HTTPS POST over a Tor exit to `relay_host:443`.
+    async fn stealth_post_via_exit(
+        &self,
+        queue_id: &str,
+        sender_auth_hex: &str,
+        payload_hex: &str,
+        relay_host: &str,
+    ) -> Result<String, TorError> {
+        let client = {
+            let inner = self.inner.lock().unwrap();
+            if inner.stealth_state != StealthState::Ready {
+                return Err(TorError::NotBootstrapped);
+            }
+            inner.arti_client.clone().ok_or(TorError::NotBootstrapped)?
+        };
+        let isolated = client.isolated_client();
+        let stream = isolated
+            .connect((relay_host, 443u16))
+            .await
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config));
+        let server_name = rustls::pki_types::ServerName::try_from(relay_host.to_string())
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        let mut tls_stream = connector
+            .connect(server_name, stream)
+            .await
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        let body = format!(
+            "POST /q/{} HTTP/1.1\r\nHost: {}\r\nX-Sender-Auth: {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            queue_id, relay_host, sender_auth_hex, payload_hex.len(), payload_hex
+        );
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tls_stream
+            .write_all(body.as_bytes())
+            .await
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        tls_stream
+            .flush()
+            .await
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        let mut raw = Vec::new();
+        tls_stream
+            .read_to_end(&mut raw)
+            .await
+            .map_err(|e| TorError::CircuitError(e.to_string()))?;
+        let text = String::from_utf8_lossy(&raw).to_string();
+        parse_relay_response(&text)
+    }
+
+    /// Blocking wrapper around `stealth_post_with_fallback`, for FFI callers.
+    pub fn stealth_post_with_fallback_blocking(
+        &self,
+        queue_id: &str,
+        sender_auth_hex: &str,
+        payload_hex: &str,
+        relay_host: &str,
+    ) -> Result<String, TorError> {
+        let runtime = {
+            let inner = self.inner.lock().unwrap();
+            inner.arti_runtime.clone()
+        };
+        let Some(runtime) = runtime else {
+            return Err(TorError::NotBootstrapped);
+        };
+        runtime.block_on(self.stealth_post_with_fallback(
+            queue_id,
+            sender_auth_hex,
+            payload_hex,
+            relay_host,
+        ))
+    }
+
     /// Synchronous wrapper around `stealth_post`, for FFI callers.
     /// Blocks the calling thread on the Arti runtime for the duration
     /// of the Tor request — Flutter must call this off the main

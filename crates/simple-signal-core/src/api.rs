@@ -594,9 +594,43 @@ impl SimpleSignalApp {
             .start_stealth_bootstrap(std::path::Path::new(data_dir), onion_address)
     }
 
+    pub fn start_stealth_bootstrap_with_bridges(
+        &self,
+        data_dir: &str,
+        onion_address: Option<String>,
+        bridge_lines: &[String],
+    ) -> Result<(), TorError> {
+        self.tor_manager.start_stealth_bootstrap_with_bridges(
+            std::path::Path::new(data_dir),
+            onion_address,
+            bridge_lines,
+        )
+    }
+
     /// Current Stealth bootstrap status.
     pub fn stealth_status(&self) -> StealthStatus {
         self.tor_manager.stealth_status()
+    }
+
+    /// Sends a relay POST over Stealth (onion-first, Tor-exit fallback),
+    /// blocking the caller.
+    /// See `TorClientManager::stealth_post_blocking` for the UI-thread warning.
+    pub fn stealth_send(
+        &self,
+        queue_id: &str,
+        sender_auth_hex: &str,
+        payload_hex: &str,
+    ) -> Result<String, TorError> {
+        let relay_host = DEFAULT_RELAY_URL
+            .strip_prefix("https://")
+            .unwrap_or(DEFAULT_RELAY_URL);
+        let runtime = {
+            // Reuse the Arti runtime via a blocking wrapper in tor.rs.
+            // This method lives on the manager to keep runtime handling in one place.
+            self.tor_manager
+                .stealth_post_with_fallback_blocking(queue_id, sender_auth_hex, payload_hex, relay_host)
+        };
+        runtime
     }
 
     /// Generates the user's standardized Contact Link for QR display.

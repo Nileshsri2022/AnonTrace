@@ -138,4 +138,15 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
 
   @override
   Future<bool> isActive() async => false;
+
+  @override
+  Future<bool> setTransportMode(String mode) async => false;
+  @override
+  Future<String?> getTransportMode() async => 'normal';
+  @override
+  Future<bool> startStealthBootstrap({required String dataDir, String? onionAddress, String? bridgeLines}) async => false;
+  @override
+  Map<String, dynamic>? getStealthStatus() => null;
+  @override
+  Future<bool> stealthSend({required String queueId, required String senderAuthHex, required String payloadHex}) async => false;
 }

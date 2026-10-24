@@ -71,4 +71,9 @@ abstract class SimpleSignalBridge {
   Future<List<MessageSummary>> receiveMessages({String? conversationId});
   Future<void> setDormant(bool dormant);
   Future<bool> isActive();
+  Future<bool> setTransportMode(String mode);
+  Future<String?> getTransportMode();
+  Future<bool> startStealthBootstrap({required String dataDir, String? onionAddress, String? bridgeLines});
+  Map<String, dynamic>? getStealthStatus();
+  Future<bool> stealthSend({required String queueId, required String senderAuthHex, required String payloadHex});
 }

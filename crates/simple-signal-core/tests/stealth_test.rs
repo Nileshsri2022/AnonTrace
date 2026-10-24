@@ -33,6 +33,18 @@ fn isolation_tokens_are_per_queue_and_deterministic() {
     assert_eq!(a, manager.isolation_token_for_queue("queue-a"));
 }
 
+#[tokio::test]
+async fn stealth_exit_fallback_fails_closed_when_not_bootstrapped() {
+    let manager = TorClientManager::default_client();
+    let err = manager
+        .stealth_post_with_fallback("blind123", "aabb", "deadbeef", "relay.anontrace.app")
+        .await
+        .unwrap_err();
+    // No clearnet fallback: without a bootstrapped Arti client, it fails
+    // closed instead of sending via any non-Tor path.
+    assert!(err.to_string().contains("not bootstrapped"));
+}
+
 #[test]
 fn relay_post_wire_shape_and_response_parsing() {
     let req = format_relay_post("blind123", "example.onion", "aabb", "deadbeef");
