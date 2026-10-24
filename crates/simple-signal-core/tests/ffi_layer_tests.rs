@@ -48,4 +48,33 @@ fn test_ffi_lifecycle() {
     assert_eq!(recv_json["success"], true);
     assert!(recv_json["messages"].as_array().unwrap().is_empty());
     unsafe { simple_signal_free_string(recv_res_ptr) };
+
+    // 5. Test simple_signal_get_inbox_queue
+    let queue_res_ptr = simple_signal_get_inbox_queue();
+    assert!(!queue_res_ptr.is_null());
+    let queue_str = unsafe { CStr::from_ptr(queue_res_ptr).to_str().unwrap() };
+    let queue_json: Value = serde_json::from_str(queue_str).unwrap();
+    assert_eq!(queue_json["success"], true);
+    assert!(queue_json["queue_id"].as_str().unwrap().starts_with("anontrace_inbox_"));
+    unsafe { simple_signal_free_string(queue_res_ptr) };
+
+    // 6. Test simple_signal_process_payload with empty payload
+    let c_empty_hex = CString::new("").unwrap();
+    let proc_res_ptr = unsafe { simple_signal_process_payload(c_empty_hex.as_ptr()) };
+    assert!(!proc_res_ptr.is_null());
+    let proc_str = unsafe { CStr::from_ptr(proc_res_ptr).to_str().unwrap() };
+    let proc_json: Value = serde_json::from_str(proc_str).unwrap();
+    assert_eq!(proc_json["success"], true);
+    assert_eq!(proc_json["message"], Value::Null);
+    unsafe { simple_signal_free_string(proc_res_ptr) };
+
+    // 7. Test simple_signal_process_payload with invalid hex
+    let c_invalid_hex = CString::new("not_hex!").unwrap();
+    let err_res_ptr = unsafe { simple_signal_process_payload(c_invalid_hex.as_ptr()) };
+    assert!(!err_res_ptr.is_null());
+    let err_str = unsafe { CStr::from_ptr(err_res_ptr).to_str().unwrap() };
+    let err_json: Value = serde_json::from_str(err_str).unwrap();
+    assert_eq!(err_json["success"], false);
+    assert!(err_json["error"].as_str().unwrap().contains("Hex decode error"));
+    unsafe { simple_signal_free_string(err_res_ptr) };
 }

@@ -170,7 +170,7 @@ impl SimpleSignalApp {
     /// Returns the user's permanent local inbox queue ID derived from Ed25519 identity key.
     pub fn my_inbox_queue_id(&self) -> String {
         let queue_suffix = hex::encode(&self.identity.verifying_key.to_bytes()[..6]);
-        format!("q_inbox_{}", queue_suffix)
+        format!("anontrace_inbox_{}", queue_suffix)
     }
 
     /// Generates the user's standardized Contact Link for QR display.
@@ -180,7 +180,7 @@ impl SimpleSignalApp {
         qr_bundle.kyber_prekey = Vec::new();
 
         let link = ContactLink {
-            relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
+            relay_onion: "https://ntfy.sh".to_string(),
             receive_queue_id: self.my_inbox_queue_id(),
             sender_auth_key: vec![0x11; 32],
             prekey_bundle: qr_bundle,
@@ -191,12 +191,15 @@ impl SimpleSignalApp {
     }
 
     /// Scans or imports a partner's Contact Link URI, negotiating pairwise queues and initializing
-    /// the Double Ratchet session.
-    pub fn import_contact_link(&self, uri: &str) -> Result<ConversationSummary, FfiError> {
+    /// the Double Ratchet session, returning summary, partner queue ID, and framed handshake hex.
+    pub fn import_contact_link_with_handshake(
+        &self,
+        uri: &str,
+    ) -> Result<(ConversationSummary, String, String), FfiError> {
         let remote_link = ContactLink::from_uri(uri)?;
 
         let my_return_queue = QueueCoordinates {
-            relay_onion: "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion".to_string(),
+            relay_onion: "https://ntfy.sh".to_string(),
             queue_id: self.my_inbox_queue_id(),
             sender_auth_key: vec![0x22; 32],
         };
@@ -221,10 +224,11 @@ impl SimpleSignalApp {
             &session_bytes,
         )?;
 
-        // Transmit handshake message to partner's receive queue so they establish matching receiver session
+        let mut handshake_hex = String::new();
         if let Ok(handshake_bytes) = handshake_msg.to_bytes() {
             let mut framed = vec![0x00]; // 0x00 = Handshake frame
             framed.extend_from_slice(&handshake_bytes);
+            handshake_hex = hex::encode(&framed);
             crate::net::smp::SmpRelayHub::global().send_to_queue(&remote_link.receive_queue_id, framed);
         }
 
@@ -239,18 +243,25 @@ impl SimpleSignalApp {
             .get_conversation(&conversation_id)?
             .ok_or_else(|| FfiError::NotFound("Conversation not found after insert".to_string()))?;
 
-        Ok(ConversationSummary::from(conv))
+        Ok((ConversationSummary::from(conv), remote_link.receive_queue_id, handshake_hex))
     }
 
-    /// Encrypts and sends a chat message across the Double Ratchet and records it in storage.
-    pub fn send_chat_message(
+    /// Scans or imports a partner's Contact Link URI, negotiating pairwise queues and initializing
+    /// the Double Ratchet session.
+    pub fn import_contact_link(&self, uri: &str) -> Result<ConversationSummary, FfiError> {
+        let (conv, _, _) = self.import_contact_link_with_handshake(uri)?;
+        Ok(conv)
+    }
+
+    /// Prepares an encrypted outbound chat message, saves it locally, and returns the message summary,
+    /// destination partner queue ID, and hex-encoded wire payload for HTTPS relay dispatch.
+    pub fn prepare_outbound_chat_message(
         &self,
         conversation_id: &str,
         text: &str,
-    ) -> Result<MessageSummary, FfiError> {
+    ) -> Result<(MessageSummary, String, String), FfiError> {
         let mut sessions = self.active_sessions.lock().unwrap();
 
-        // If session not currently active in memory, attempt to restore from encrypted SQLite storage
         if !sessions.contains_key(conversation_id) {
             if let Some(session_rec) = self.db.get_latest_session(conversation_id)? {
                 let restored = DoubleRatchetSession::from_bytes(&session_rec.session_record)
@@ -267,22 +278,25 @@ impl SimpleSignalApp {
             .encrypt(text.as_bytes())
             .map_err(|e| FfiError::CryptoError(e.to_string()))?;
 
-        // Lookup conversation details to transmit across SMP relay queue
-        if let Ok(Some(conv)) = self.db.get_conversation(conversation_id) {
-            let partner_queue_id = conv
-                .send_queue_uri
-                .split('/')
-                .last()
-                .unwrap_or(&conv.send_queue_uri);
+        let conv = self
+            .db
+            .get_conversation(conversation_id)?
+            .ok_or_else(|| FfiError::NotFound("Conversation not found".to_string()))?;
 
-            // Framed wire protocol: [0x01 (Message Frame), 32-byte sender identity key, ciphertext]
-            let mut framed = Vec::with_capacity(1 + 32 + ciphertext.len());
-            framed.push(0x01);
-            framed.extend_from_slice(&self.identity.verifying_key.to_bytes());
-            framed.extend_from_slice(&ciphertext);
+        let partner_queue_id = conv
+            .send_queue_uri
+            .split('/')
+            .last()
+            .unwrap_or(&conv.send_queue_uri)
+            .to_string();
 
-            crate::net::smp::SmpRelayHub::global().send_to_queue(partner_queue_id, framed);
-        }
+        let mut framed = Vec::with_capacity(1 + 32 + ciphertext.len());
+        framed.push(0x01);
+        framed.extend_from_slice(&self.identity.verifying_key.to_bytes());
+        framed.extend_from_slice(&ciphertext);
+
+        // Also deliver to local in-memory hub (keeps unit tests passing)
+        crate::net::smp::SmpRelayHub::global().send_to_queue(&partner_queue_id, framed.clone());
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -293,7 +307,6 @@ impl SimpleSignalApp {
             .unwrap_or_default()
             .as_nanos();
 
-        // Persist updated ratchet state so forward secrecy and ratchet step survive app restarts
         let updated_bytes = session
             .to_bytes()
             .map_err(|e| FfiError::CryptoError(e.to_string()))?;
@@ -314,8 +327,125 @@ impl SimpleSignalApp {
         };
 
         self.db.insert_message(&record)?;
+        let summary = MessageSummary::from(record);
+        let payload_hex = hex::encode(&framed);
 
-        Ok(MessageSummary::from(record))
+        Ok((summary, partner_queue_id, payload_hex))
+    }
+
+    /// Encrypts and sends a chat message across the Double Ratchet and records it in storage.
+    pub fn send_chat_message(
+        &self,
+        conversation_id: &str,
+        text: &str,
+    ) -> Result<MessageSummary, FfiError> {
+        let (summary, _, _) = self.prepare_outbound_chat_message(conversation_id, text)?;
+        Ok(summary)
+    }
+
+    /// Processes a raw framed payload (either Handshake 0x00 or Encrypted Message 0x01)
+    /// received from the network relay.
+    pub fn process_incoming_payload(&self, payload: &[u8]) -> Result<Option<MessageSummary>, FfiError> {
+        let my_queue = self.my_inbox_queue_id();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let msg_id = format!("msg_{}", nanos);
+
+        if payload.is_empty() {
+            return Ok(None);
+        }
+
+        match payload[0] {
+            0x00 => {
+                if let Ok(handshake) = ContactHandshakeMessage::from_bytes(&payload[1..]) {
+                    let conv_id = format!(
+                        "conv_{}",
+                        hex::encode(&handshake.pqxdh.sender_identity_key[..6])
+                    );
+
+                    let has_outbound = self
+                        .db
+                        .list_messages(&conv_id)
+                        .map(|msgs| msgs.iter().any(|m| m.direction == "outbound"))
+                        .unwrap_or(false);
+
+                    if !has_outbound {
+                        if let Ok((session, return_queue)) = accept_contact_handshake(
+                            &handshake,
+                            &self.identity,
+                            &self._prekey_secrets,
+                        ) {
+                            if let Ok(session_bytes) = session.to_bytes() {
+                                let _ = persist_contact_conversation(
+                                    &self.db,
+                                    &conv_id,
+                                    &return_queue,
+                                    &my_queue,
+                                    &session_bytes,
+                                );
+                                let mut sessions = self.active_sessions.lock().unwrap();
+                                sessions.insert(conv_id, session);
+                            }
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            0x01 => {
+                if payload.len() < 1 + 32 + 68 {
+                    return Ok(None);
+                }
+
+                let mut sender_key = [0u8; 32];
+                sender_key.copy_from_slice(&payload[1..33]);
+                let conv_id = format!("conv_{}", hex::encode(&sender_key[..6]));
+                let ciphertext = &payload[33..];
+
+                let mut sessions = self.active_sessions.lock().unwrap();
+                if !sessions.contains_key(&conv_id) {
+                    if let Ok(Some(session_rec)) = self.db.get_latest_session(&conv_id) {
+                        if let Ok(restored) = DoubleRatchetSession::from_bytes(&session_rec.session_record) {
+                            sessions.insert(conv_id.clone(), restored);
+                        }
+                    }
+                }
+
+                if let Some(session) = sessions.get_mut(&conv_id) {
+                    if let Ok(plaintext_bytes) = session.decrypt(ciphertext) {
+                        if let Ok(plaintext) = String::from_utf8(plaintext_bytes) {
+                            let record = MessageRecord {
+                                id: msg_id,
+                                conversation_id: conv_id.clone(),
+                                direction: "inbound".to_string(),
+                                body: plaintext.as_bytes().to_vec(),
+                                timestamp: now,
+                                status: "received".to_string(),
+                            };
+
+                            let _ = self.db.insert_message(&record);
+
+                            if let Ok(updated_bytes) = session.to_bytes() {
+                                let _ = self.db.insert_session(&SessionRecord {
+                                    conversation_id: conv_id,
+                                    session_record: updated_bytes,
+                                    updated_at: now,
+                                });
+                            }
+
+                            return Ok(Some(MessageSummary::from(record)));
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Polls incoming messages from the user's SMP inbox queue across all conversations,
@@ -329,102 +459,9 @@ impl SimpleSignalApp {
         }
 
         let mut received_messages = Vec::new();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        for (msg_id, payload) in payloads {
-            if payload.is_empty() {
-                continue;
-            }
-
-            match payload[0] {
-                0x00 => {
-                    // Handshake frame: [0x00, JSON ContactHandshakeMessage]
-                    if let Ok(handshake) = ContactHandshakeMessage::from_bytes(&payload[1..]) {
-                        let conv_id = format!(
-                            "conv_{}",
-                            hex::encode(&handshake.pqxdh.sender_identity_key[..6])
-                        );
-
-                        // If we already sent outbound messages on this conversation, do not overwrite our session
-                        let has_outbound = self
-                            .db
-                            .list_messages(&conv_id)
-                            .map(|msgs| msgs.iter().any(|m| m.direction == "outbound"))
-                            .unwrap_or(false);
-
-                        if !has_outbound {
-                            if let Ok((session, return_queue)) = accept_contact_handshake(
-                                &handshake,
-                                &self.identity,
-                                &self._prekey_secrets,
-                            ) {
-                                if let Ok(session_bytes) = session.to_bytes() {
-                                    let _ = persist_contact_conversation(
-                                        &self.db,
-                                        &conv_id,
-                                        &return_queue,
-                                        &my_queue,
-                                        &session_bytes,
-                                    );
-                                    let mut sessions = self.active_sessions.lock().unwrap();
-                                    sessions.insert(conv_id, session);
-                                }
-                            }
-                        }
-                    }
-                }
-                0x01 => {
-                    // Encrypted message frame: [0x01, 32-byte sender_identity_key, ciphertext]
-                    if payload.len() < 1 + 32 + 68 {
-                        continue;
-                    }
-
-                    let mut sender_key = [0u8; 32];
-                    sender_key.copy_from_slice(&payload[1..33]);
-                    let conv_id = format!("conv_{}", hex::encode(&sender_key[..6]));
-                    let ciphertext = &payload[33..];
-
-                    let mut sessions = self.active_sessions.lock().unwrap();
-                    if !sessions.contains_key(&conv_id) {
-                        if let Ok(Some(session_rec)) = self.db.get_latest_session(&conv_id) {
-                            if let Ok(restored) = DoubleRatchetSession::from_bytes(&session_rec.session_record) {
-                                sessions.insert(conv_id.clone(), restored);
-                            }
-                        }
-                    }
-
-                    if let Some(session) = sessions.get_mut(&conv_id) {
-                        if let Ok(plaintext_bytes) = session.decrypt(ciphertext) {
-                            if let Ok(plaintext) = String::from_utf8(plaintext_bytes) {
-                                let record = MessageRecord {
-                                    id: msg_id,
-                                    conversation_id: conv_id.clone(),
-                                    direction: "inbound".to_string(),
-                                    body: plaintext.as_bytes().to_vec(),
-                                    timestamp: now,
-                                    status: "received".to_string(),
-                                };
-
-                                let _ = self.db.insert_message(&record);
-                                received_messages.push(MessageSummary::from(record));
-
-                                if let Ok(updated_bytes) = session.to_bytes() {
-                                    let _ = self.db.insert_session(&SessionRecord {
-                                        conversation_id: conv_id,
-                                        session_record: updated_bytes,
-                                        updated_at: now,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    // Unknown wire frame tag - discard safely
-                }
+        for (_msg_id, payload) in payloads {
+            if let Ok(Some(msg)) = self.process_incoming_payload(&payload) {
+                received_messages.push(msg);
             }
         }
 

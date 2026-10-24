@@ -59,6 +59,46 @@ pub unsafe extern "C" fn simple_signal_init(
     }
 }
 
+/// Returns the local user's permanent inbox queue ID.
+/// Returns JSON: {"success": true, "queue_id": "anontrace_inbox_..."} or error.
+#[unsafe(no_mangle)]
+pub extern "C" fn simple_signal_get_inbox_queue() -> *mut c_char {
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    let queue_id = app.my_inbox_queue_id();
+    to_c_string(json!({"success": true, "queue_id": queue_id}).to_string())
+}
+
+/// Processes a raw hex-encoded wire payload received from the HTTPS relay queue.
+/// Returns JSON: {"success": true, "message": {...}} or {"success": true, "message": null} or error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn simple_signal_process_payload(payload_hex_ptr: *const c_char) -> *mut c_char {
+    let hex_str = match unsafe { to_rust_str(payload_hex_ptr) } {
+        Ok(s) => s,
+        Err(e) => return to_c_string(json!({"success": false, "error": e}).to_string()),
+    };
+
+    let payload = match hex::decode(hex_str) {
+        Ok(b) => b,
+        Err(e) => return to_c_string(json!({"success": false, "error": format!("Hex decode error: {}", e)}).to_string()),
+    };
+
+    let guard = APP_INSTANCE.lock().unwrap();
+    let app = match guard.as_ref() {
+        Some(a) => a,
+        None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
+    };
+
+    match app.process_incoming_payload(&payload) {
+        Ok(maybe_msg) => to_c_string(json!({"success": true, "message": maybe_msg}).to_string()),
+        Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
+    }
+}
+
 /// Returns the user's standardized Contact Link for QR generation.
 /// Returns JSON: {"success": true, "uri": "..."} or {"success": false, "error": "..."}
 #[unsafe(no_mangle)]
@@ -76,7 +116,7 @@ pub extern "C" fn simple_signal_get_contact_link() -> *mut c_char {
 }
 
 /// Imports a partner's Contact Link URI and establishes a pairwise session.
-/// Returns JSON: {"success": true, "conversation": {...}} or error.
+/// Returns JSON: {"success": true, "conversation": {...}, "partner_queue_id": "...", "handshake_hex": "..."} or error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simple_signal_import_contact_link(uri_ptr: *const c_char) -> *mut c_char {
     let uri = match unsafe { to_rust_str(uri_ptr) } {
@@ -90,14 +130,19 @@ pub unsafe extern "C" fn simple_signal_import_contact_link(uri_ptr: *const c_cha
         None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
     };
 
-    match app.import_contact_link(uri) {
-        Ok(conv) => to_c_string(json!({"success": true, "conversation": conv}).to_string()),
+    match app.import_contact_link_with_handshake(uri) {
+        Ok((conv, partner_queue_id, handshake_hex)) => to_c_string(json!({
+            "success": true,
+            "conversation": conv,
+            "partner_queue_id": partner_queue_id,
+            "handshake_hex": handshake_hex,
+        }).to_string()),
         Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
     }
 }
 
 /// Encrypts and sends a message across the Double Ratchet session.
-/// Returns JSON: {"success": true, "message": {...}} or error.
+/// Returns JSON: {"success": true, "message": {...}, "partner_queue_id": "...", "payload_hex": "..."} or error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simple_signal_send_message(
     conv_id_ptr: *const c_char,
@@ -118,8 +163,13 @@ pub unsafe extern "C" fn simple_signal_send_message(
         None => return to_c_string(json!({"success": false, "error": "App not initialized"}).to_string()),
     };
 
-    match app.send_chat_message(conv_id, text) {
-        Ok(msg) => to_c_string(json!({"success": true, "message": msg}).to_string()),
+    match app.prepare_outbound_chat_message(conv_id, text) {
+        Ok((msg, partner_queue_id, payload_hex)) => to_c_string(json!({
+            "success": true,
+            "message": msg,
+            "partner_queue_id": partner_queue_id,
+            "payload_hex": payload_hex,
+        }).to_string()),
         Err(e) => to_c_string(json!({"success": false, "error": e.to_string()}).to_string()),
     }
 }

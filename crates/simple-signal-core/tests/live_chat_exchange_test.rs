@@ -110,3 +110,65 @@ async fn test_one_way_qr_scan_and_auto_handshake_messaging() {
     assert_eq!(bob_received.len(), 1);
     assert_eq!(bob_received[0].body_text, "Got it! No mutual QR scan required!");
 }
+
+#[test]
+fn test_two_party_raw_wire_payload_exchange_roundtrip() {
+    let dir = tempdir().expect("tempdir");
+    let alice_db = dir.path().join("alice_wire.db");
+    let bob_db = dir.path().join("bob_wire.db");
+
+    let alice_app =
+        SimpleSignalApp::init(alice_db.to_str().unwrap(), "alice_wire_pin").expect("alice init");
+    let bob_app =
+        SimpleSignalApp::init(bob_db.to_str().unwrap(), "bob_wire_pin").expect("bob init");
+
+    // 1. Alice gets link & inbox queue
+    let alice_link_uri = alice_app.get_my_contact_link().expect("alice link");
+    let alice_queue = alice_app.my_inbox_queue_id();
+    assert!(alice_queue.starts_with("anontrace_inbox_"));
+
+    // 2. Bob imports Alice's link via import_contact_link_with_handshake
+    let (bob_conv, partner_queue, handshake_hex) = bob_app
+        .import_contact_link_with_handshake(&alice_link_uri)
+        .expect("bob import handshake");
+    assert_eq!(partner_queue, alice_queue);
+    assert!(!handshake_hex.is_empty());
+
+    // 3. Alice receives handshake payload over the wire (no SmpRelayHub used)
+    let handshake_bytes = hex::decode(&handshake_hex).expect("decode handshake");
+    let maybe_msg = alice_app
+        .process_incoming_payload(&handshake_bytes)
+        .expect("alice process handshake");
+    assert!(maybe_msg.is_none(), "Handshake produces no chat message");
+
+    // 4. Bob sends a message: prepare_outbound_chat_message
+    let (bob_msg, msg_partner_queue, payload_hex) = bob_app
+        .prepare_outbound_chat_message(&bob_conv.id, "Real wire payload over HTTPS port 443!")
+        .expect("bob prepare message");
+    assert_eq!(msg_partner_queue, alice_queue);
+    assert_eq!(bob_msg.body_text, "Real wire payload over HTTPS port 443!");
+
+    // 5. Alice receives Bob's message payload over the wire
+    let payload_bytes = hex::decode(&payload_hex).expect("decode payload");
+    let decrypted = alice_app
+        .process_incoming_payload(&payload_bytes)
+        .expect("alice process payload")
+        .expect("alice message decrypted");
+    assert_eq!(decrypted.direction, "inbound");
+    assert_eq!(decrypted.body_text, "Real wire payload over HTTPS port 443!");
+
+    // 6. Alice replies: prepare_outbound_chat_message
+    let (_alice_reply, bob_queue, reply_hex) = alice_app
+        .prepare_outbound_chat_message(&decrypted.conversation_id, "Alice received message over wire!")
+        .expect("alice prepare reply");
+    assert_eq!(bob_queue, bob_app.my_inbox_queue_id());
+
+    // 7. Bob receives Alice's reply payload over the wire
+    let reply_bytes = hex::decode(&reply_hex).expect("decode reply");
+    let bob_decrypted = bob_app
+        .process_incoming_payload(&reply_bytes)
+        .expect("bob process reply")
+        .expect("bob message decrypted");
+    assert_eq!(bob_decrypted.direction, "inbound");
+    assert_eq!(bob_decrypted.body_text, "Alice received message over wire!");
+}

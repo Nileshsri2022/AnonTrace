@@ -55,6 +55,7 @@ class MessageSummary {
 abstract class SimpleSignalBridge {
   Future<void> initApp({required String dbPath, required String masterPin});
   Future<String> getMyContactLink();
+  Future<String?> getMyInboxQueueId();
   Future<ConversationSummary> importContactLink(String uri);
   Future<MessageSummary> sendChatMessage({required String conversationId, required String text});
   Future<List<ConversationSummary>> listConversations();

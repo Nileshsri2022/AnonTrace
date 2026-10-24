@@ -25,6 +25,9 @@ class WebSimpleSignalBridge implements SimpleSignalBridge {
   }
 
   @override
+  Future<String?> getMyInboxQueueId() async => 'anontrace_inbox_stub';
+
+  @override
   Future<ConversationSummary> importContactLink(String uri) async {
     AppLogger.info('WEB_BRIDGE', 'importContactLink: $uri');
     final newConv = ConversationSummary(
