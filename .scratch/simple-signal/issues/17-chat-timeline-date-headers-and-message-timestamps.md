@@ -2,7 +2,7 @@
 
 | Property | Value |
 | :--- | :--- |
-| **Status** | In Progress |
+| **Status** | Completed |
 | **Type** | Feature / UI Enhancement |
 | **Release Target** | v1.0.13 |
 | **Blockers** | 15 (SSE Streaming Transport) |
@@ -59,8 +59,8 @@ Place the timestamp subtly at the bottom-right of each incoming and outgoing bub
 ---
 
 ## 3. Verification Criteria
-- [ ] Pure helper `groupMessagesByDate` tested with multiple messages across same day, consecutive days, and past weeks.
-- [ ] Date headers display "Today", "Yesterday", and formatted dates accurately.
-- [ ] Message bubbles render localized timestamps (`hh:mm a`).
-- [ ] All Flutter widget and unit tests pass (`flutter test`).
-- [ ] Post-quantum encryption and SSE streaming transport remain completely unaffected.
+- [x] Pure helper `groupMessagesByDate` tested with multiple messages across same day, consecutive days, and past weeks.
+- [x] Date headers display "Today", "Yesterday", and formatted dates accurately.
+- [x] Message bubbles render localized timestamps (`hh:mm a`).
+- [x] All Flutter widget and unit tests pass (`flutter test`).
+- [x] Post-quantum encryption and SSE streaming transport remain completely unaffected.

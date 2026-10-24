@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../ffi/bridge.dart';
+import '../utils/timeline_adapter.dart';
 
 class ChatScreen extends StatefulWidget {
   final ConversationSummary conversation;
@@ -222,29 +223,112 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final msg = _messages[index];
-                          final isOutbound = msg.direction == 'outbound';
-                          return Align(
-                            alignment: isOutbound ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              constraints: BoxConstraints(
-                                maxWidth: MediaQuery.of(context).size.width * 0.75,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF2A313C),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                msg.bodyText,
-                                style: const TextStyle(color: Colors.white, fontSize: 14),
-                              ),
-                            ),
+                    : Builder(
+                        builder: (context) {
+                          final timelineItems = groupMessagesByDate(_messages);
+                          return ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            itemCount: timelineItems.length,
+                            itemBuilder: (context, index) {
+                              final item = timelineItems[index];
+
+                              if (item is DateHeaderItem) {
+                                return Center(
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(vertical: 10),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1E2630),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12, width: 0.5),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 1),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Text(
+                                      item.label,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 0.3,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+
+                              final bubble = item as MessageBubbleItem;
+                              final msg = bubble.message;
+                              final isOutbound = msg.direction == 'outbound';
+
+                              return Align(
+                                alignment: isOutbound ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 3),
+                                  padding: const EdgeInsets.only(left: 12, right: 12, top: 8, bottom: 6),
+                                  constraints: BoxConstraints(
+                                    maxWidth: MediaQuery.of(context).size.width * 0.78,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isOutbound ? const Color(0xFF2C6BED) : const Color(0xFF242C37),
+                                    borderRadius: BorderRadius.only(
+                                      topLeft: const Radius.circular(16),
+                                      topRight: const Radius.circular(16),
+                                      bottomLeft: Radius.circular(isOutbound ? 16 : 4),
+                                      bottomRight: Radius.circular(isOutbound ? 4 : 16),
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.15),
+                                        blurRadius: 3,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: isOutbound ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        msg.bodyText,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          height: 1.3,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            bubble.formattedTime,
+                                            style: TextStyle(
+                                              color: isOutbound ? Colors.white70 : Colors.white54,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w400,
+                                            ),
+                                          ),
+                                          if (isOutbound) ...[
+                                            const SizedBox(width: 4),
+                                            const Icon(
+                                              Icons.done,
+                                              size: 13,
+                                              color: Colors.white70,
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
                           );
                         },
                       ),
