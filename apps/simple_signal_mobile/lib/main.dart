@@ -128,7 +128,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   }
 
   Future<void> _unlockApp(String pin) async {
-    AppLogger.info('AUTH', 'Unlocking app with user PIN: $pin');
+    // Phase 0 (Issue 27): never log the PIN itself — only that an
+    // unlock was attempted. The PIN unlocks the SQLCipher database.
+    AppLogger.info('AUTH', 'Unlocking app');
     String dbPath = 'anontrace.db';
     try {
       final appDir = await getApplicationDocumentsDirectory();
