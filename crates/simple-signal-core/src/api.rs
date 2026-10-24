@@ -1,8 +1,16 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use fips203::ml_kem_1024;
+use fips203::traits::SerDes;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use rusqlite::{params, Connection};
 use thiserror::Error;
+use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
 use crate::contact::handshake::{
     accept_contact_handshake, initiate_contact_exchange, ContactHandshakeMessage, QueueCoordinates,
@@ -16,8 +24,9 @@ use crate::crypto::pqxdh::{
 use crate::crypto::ratchet::DoubleRatchetSession;
 use crate::net::tor::{DormancyMode, TorClientManager, TorError};
 use crate::storage::db::{
-    derive_key, ConversationRecord, EncryptedDatabase, KeyDerivationParams, MessageRecord,
-    SessionRecord, StorageError,
+    compute_auth_verifier, derive_key, ConversationRecord, EncryptedDatabase,
+    KeyDerivationParams, MessageRecord, SessionRecord, StorageError, StoredIdentity,
+    StoredPrekeys,
 };
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -127,21 +136,322 @@ impl std::fmt::Debug for SimpleSignalApp {
     }
 }
 
+/// Salt for pre-Option-A databases. Those databases were created with
+/// this constant salt and a plaintext file; see migrate_legacy_db().
+const LEGACY_SALT: [u8; 16] = [0x77; 16];
+
+/// Sidecar file holding the (public, non-secret) Argon2id salt as hex.
+/// It cannot live inside the SQLCipher file: the salt is needed to
+/// derive the key that decrypts that file.
+fn salt_path_for(db_path: &str) -> String {
+    format!("{}.salt", db_path)
+}
+
+fn load_or_create_salt(db_path: &str) -> Result<[u8; 16], FfiError> {
+    let salt_path = salt_path_for(db_path);
+    if let Ok(hex_salt) = fs::read_to_string(&salt_path) {
+        if let Ok(bytes) = hex::decode(hex_salt.trim()) {
+            if bytes.len() == 16 {
+                let mut salt = [0u8; 16];
+                salt.copy_from_slice(&bytes);
+                return Ok(salt);
+            }
+        }
+        // Corrupt salt file: fall through and regenerate below only if
+        // there is no database to unlock; otherwise fail closed.
+        if Path::new(db_path).exists() {
+            return Err(FfiError::DatabaseError(
+                "Corrupt salt file for existing database".to_string(),
+            ));
+        }
+    }
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    fs::write(&salt_path, hex::encode(salt))
+        .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+    Ok(salt)
+}
+
+/// Migrates a pre-Option-A plaintext database (constant salt, no salt
+/// file) to a SQLCipher database with a fresh random salt.
+/// On any failure the original file and the salt file are left alone
+/// (salt file is removed if this function created it).
+/// Returns the new salt. Conversations, messages, and sessions are
+/// copied; identity/prekeys are created by init() afterwards, so old
+/// QR links must be re-shared once (see ADR-0021).
+fn migrate_legacy_db(db_path: &str, passphrase: &str) -> Result<[u8; 16], FfiError> {
+    let legacy_params = KeyDerivationParams {
+        memory_kib: 8192,
+        iterations: 1,
+        parallelism: 1,
+        salt: LEGACY_SALT,
+    };
+    let legacy_key = derive_key(passphrase, &legacy_params)?;
+    let expected_verifier = compute_auth_verifier(&legacy_key);
+
+    // Read the legacy plaintext database (no PRAGMA key: it is not
+    // SQLCipher-encrypted). A plain rusqlite Connection reads it.
+    let legacy_conn = Connection::open(db_path)
+        .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+    let stored_verifier: Option<Vec<u8>> = legacy_conn
+        .query_row(
+            "SELECT auth_verifier FROM _security_header WHERE id = 1;",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    match stored_verifier {
+        Some(v) if v == expected_verifier.to_vec() => {}
+        _ => return Err(FfiError::AuthenticationFailed),
+    }
+    let conversations: Vec<ConversationRecord> = {
+        let mut stmt = legacy_conn
+            .prepare("SELECT id, send_queue_uri, receive_queue_id, relay_onion_address, sender_auth_key, created_at FROM conversations;")
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ConversationRecord {
+                    id: row.get(0)?,
+                    send_queue_uri: row.get(1)?,
+                    receive_queue_id: row.get(2)?,
+                    relay_onion_address: row.get(3)?,
+                    sender_auth_key: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| FfiError::DatabaseError(e.to_string()))?);
+        }
+        out
+    };
+    let timers: Vec<(String, i64)> = {
+        let mut out = Vec::new();
+        for conv in &conversations {
+            if let Ok(t) = legacy_conn.query_row(
+                "SELECT disappearing_timer_seconds FROM conversations WHERE id = ?1;",
+                params![conv.id],
+                |row| row.get::<_, i64>(0),
+            ) {
+                out.push((conv.id.clone(), t));
+            }
+        }
+        out
+    };
+    let messages: Vec<MessageRecord> = {
+        let mut stmt = legacy_conn
+            .prepare("SELECT id, conversation_id, direction, body, timestamp, status, expires_at FROM messages ORDER BY timestamp ASC;")
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(MessageRecord {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    direction: row.get(2)?,
+                    body: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    status: row.get(5)?,
+                    expires_at: row.get(6)?,
+                })
+            })
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| FfiError::DatabaseError(e.to_string()))?);
+        }
+        out
+    };
+    let sessions: Vec<SessionRecord> = {
+        let mut stmt = legacy_conn
+            .prepare("SELECT conversation_id, session_record, updated_at FROM sessions ORDER BY updated_at ASC;")
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SessionRecord {
+                    conversation_id: row.get(0)?,
+                    session_record: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            })
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| FfiError::DatabaseError(e.to_string()))?);
+        }
+        out
+    };
+    drop(legacy_conn);
+
+    // From here on, any failure must clean up the new salt + migrated
+    // file so the original database is untouched.
+    let migrated_path = format!("{}.migrated", db_path);
+    let _ = fs::remove_file(&migrated_path);
+    let result: Result<[u8; 16], FfiError> = (|| {
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut salt);
+        fs::write(salt_path_for(db_path), hex::encode(salt))
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let params = KeyDerivationParams {
+            salt,
+            ..KeyDerivationParams::default()
+        };
+        let key = derive_key(passphrase, &params)?;
+        let migrated_db = EncryptedDatabase::open_or_create(Path::new(&migrated_path), &key)?;
+        for conv in &conversations {
+            migrated_db.insert_conversation(conv)?;
+        }
+        for (id, timer) in &timers {
+            migrated_db.set_disappearing_timer(id, *timer)?;
+        }
+        for msg in &messages {
+            migrated_db.insert_message(msg)?;
+        }
+        for sess in &sessions {
+            migrated_db.insert_session(sess)?;
+        }
+        drop(migrated_db);
+        // Replace the original file. Remove WAL sidecars of both files;
+        // a clean Connection close checkpoints WAL, so they should be
+        // empty/absent, but never let a stale WAL survive a rename.
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(format!("{}-wal", db_path));
+        let _ = fs::remove_file(format!("{}-shm", db_path));
+        fs::rename(&migrated_path, db_path)
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+        let _ = fs::remove_file(format!("{}-wal", migrated_path));
+        let _ = fs::remove_file(format!("{}-shm", migrated_path));
+        Ok(salt)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(salt_path_for(db_path));
+        let _ = fs::remove_file(&migrated_path);
+        let _ = fs::remove_file(format!("{}-wal", migrated_path));
+        let _ = fs::remove_file(format!("{}-shm", migrated_path));
+    }
+    result
+}
+
+fn identity_from_stored(s: &StoredIdentity) -> Result<IdentityKeyPair, FfiError> {
+    let signing_key = SigningKey::from_bytes(&s.signing_key);
+    let verifying_key = VerifyingKey::from_bytes(&s.verifying_key)
+        .map_err(|e| FfiError::CryptoError(e.to_string()))?;
+    if signing_key.verifying_key() != verifying_key {
+        return Err(FfiError::CryptoError(
+            "Stored identity keys do not match".to_string(),
+        ));
+    }
+    Ok(IdentityKeyPair {
+        signing_key,
+        verifying_key,
+        dh_secret: StaticSecret::from(s.dh_secret),
+        dh_public: XPublicKey::from(s.dh_public),
+    })
+}
+
+fn stored_from_identity(identity: &IdentityKeyPair) -> StoredIdentity {
+    StoredIdentity {
+        signing_key: *identity.signing_key.as_bytes(),
+        dh_secret: identity.dh_secret.to_bytes(),
+        verifying_key: *identity.verifying_key.as_bytes(),
+        dh_public: *identity.dh_public.as_bytes(),
+    }
+}
+
+fn prekeys_from_stored(
+    identity: &IdentityKeyPair,
+    s: &StoredPrekeys,
+) -> Result<(PreKeyBundle, PreKeySecretBundle), FfiError> {
+    if s.kyber_secret.len() != 3168 {
+        return Err(FfiError::CryptoError(
+            "Stored Kyber key has unexpected length".to_string(),
+        ));
+    }
+    let mut kyber_bytes = [0u8; 3168];
+    kyber_bytes.copy_from_slice(&s.kyber_secret);
+    let kyber_secret = ml_kem_1024::DecapsKey::try_from_bytes(kyber_bytes)
+        .map_err(|e| FfiError::CryptoError(format!("Invalid stored Kyber key: {:?}", e)))?;
+    let bundle = PreKeyBundle {
+        identity_key: *identity.verifying_key.as_bytes(),
+        identity_dh_key: *identity.dh_public.as_bytes(),
+        signed_prekey_id: s.signed_prekey_id,
+        signed_prekey: s.signed_prekey,
+        signature: s.signature,
+        one_time_prekey_id: s.one_time_prekey_id,
+        one_time_prekey: s.one_time_prekey,
+        kyber_prekey: s.kyber_public.clone(),
+    };
+    let secrets = PreKeySecretBundle {
+        signed_prekey_secret: StaticSecret::from(s.signed_secret),
+        one_time_prekey_secret: StaticSecret::from(s.one_time_secret),
+        kyber_secret,
+    };
+    Ok((bundle, secrets))
+}
+
+fn stored_from_prekeys(bundle: &PreKeyBundle, secrets: &PreKeySecretBundle) -> StoredPrekeys {
+    StoredPrekeys {
+        signed_prekey_id: bundle.signed_prekey_id,
+        signed_prekey: bundle.signed_prekey,
+        signed_secret: secrets.signed_prekey_secret.to_bytes(),
+        signature: bundle.signature,
+        one_time_prekey_id: bundle.one_time_prekey_id,
+        one_time_prekey: bundle.one_time_prekey,
+        one_time_secret: secrets.one_time_prekey_secret.to_bytes(),
+        kyber_public: bundle.kyber_prekey.clone(),
+        kyber_secret: secrets.kyber_secret.clone().into_bytes().to_vec(),
+    }
+}
+
 impl SimpleSignalApp {
     /// Initializes or unlocks the application using the Master PIN / passphrase.
+    /// Load-or-create: an existing database keeps its identity and
+    /// prekeys; a new database generates and persists them once.
     pub fn init(db_path: &str, passphrase: &str) -> Result<Self, FfiError> {
-        let params = KeyDerivationParams {
-            memory_kib: 8192,
-            iterations: 1,
-            parallelism: 1,
-            salt: [0x77; 16],
+        let db_exists = Path::new(db_path).exists()
+            && fs::metadata(db_path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
+        let salt_exists = Path::new(&salt_path_for(db_path)).exists();
+        let salt = if !salt_exists && db_exists {
+            // Pre-Option-A database: migrate it, then use its new salt.
+            migrate_legacy_db(db_path, passphrase)?
+        } else {
+            load_or_create_salt(db_path)?
         };
 
+        let params = KeyDerivationParams {
+            salt,
+            ..KeyDerivationParams::default()
+        };
         let key = derive_key(passphrase, &params)?;
         let db = EncryptedDatabase::open_or_create(Path::new(db_path), &key)?;
 
-        let identity = generate_identity_keypair();
-        let (bundle, secrets) = generate_prekey_bundle(&identity, 1, 100);
+        let (identity, bundle, secrets) = match db.load_identity()? {
+            Some(stored) => {
+                let identity = identity_from_stored(&stored)?;
+                match db.load_prekeys()? {
+                    Some(stored_prekeys) => {
+                        let (bundle, secrets) = prekeys_from_stored(&identity, &stored_prekeys)?;
+                        (identity, bundle, secrets)
+                    }
+                    None => {
+                        // Identity without prekeys (interrupted create):
+                        // regenerate the bundle as a set and store it.
+                        let (bundle, secrets) = generate_prekey_bundle(&identity, 1, 100);
+                        db.store_prekeys(&stored_from_prekeys(&bundle, &secrets))?;
+                        (identity, bundle, secrets)
+                    }
+                }
+            }
+            None => {
+                let identity = generate_identity_keypair();
+                let (bundle, secrets) = generate_prekey_bundle(&identity, 1, 100);
+                db.store_identity(&stored_from_identity(&identity))?;
+                db.store_prekeys(&stored_from_prekeys(&bundle, &secrets))?;
+                (identity, bundle, secrets)
+            }
+        };
 
         let tor_manager = TorClientManager::default_client();
 

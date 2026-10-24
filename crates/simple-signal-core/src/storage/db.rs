@@ -89,7 +89,7 @@ pub fn derive_key(passphrase: &str, params: &KeyDerivationParams) -> Result<[u8;
     Ok(key)
 }
 
-fn compute_auth_verifier(key: &[u8; 32]) -> [u8; 32] {
+pub fn compute_auth_verifier(key: &[u8; 32]) -> [u8; 32] {
     let mut mac = HmacSha256::new_from_slice(key)
         .expect("HMAC can take key of any size");
     mac.update(AUTH_CANARY_CONTEXT);
@@ -127,6 +127,31 @@ pub struct MessageRecord {
     pub expires_at: Option<i64>,
 }
 
+/// Identity + prekey material as stored in the (SQLCipher-encrypted) DB.
+/// Layouts are fixed so load/store round-trip exactly:
+/// identity public = verifying_key (32) || dh_public (32),
+/// identity private = signing_key (32) || dh_secret (32).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredIdentity {
+    pub signing_key: [u8; 32],
+    pub dh_secret: [u8; 32],
+    pub verifying_key: [u8; 32],
+    pub dh_public: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredPrekeys {
+    pub signed_prekey_id: u32,
+    pub signed_prekey: [u8; 32],
+    pub signed_secret: [u8; 32],
+    pub signature: [u8; 64],
+    pub one_time_prekey_id: u32,
+    pub one_time_prekey: [u8; 32],
+    pub one_time_secret: [u8; 32],
+    pub kyber_public: Vec<u8>,
+    pub kyber_secret: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct EncryptedDatabase {
     conn: Arc<Mutex<Connection>>,
@@ -140,12 +165,27 @@ impl std::fmt::Debug for EncryptedDatabase {
 
 impl EncryptedDatabase {
     /// Opens or creates an encrypted database file at the specified path with the derived master key.
+    /// With `bundled-sqlcipher` this is real file-level encryption: a wrong
+    /// key fails the probe below and is reported as AuthenticationFailed.
     pub fn open_or_create<P: AsRef<Path>>(path: P, key: &[u8; 32]) -> Result<Self, StorageError> {
         let conn = Connection::open(path)?;
 
-        // Enforce SQLCipher PRAGMA key if SQLCipher extension is compiled
+        // SQLCipher key — the error must propagate, never be discarded.
         let hex_key = hex::encode(key);
-        let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", hex_key));
+        conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", hex_key))?;
+
+        // Probe FIRST, before any other pragma that reads pages: on an
+        // existing encrypted file a wrong key makes even sqlite_master
+        // unreadable. On a new empty file this succeeds.
+        if let Err(e) =
+            conn.query_row("SELECT count(*) FROM sqlite_master;", [], |row| row.get::<_, i64>(0))
+        {
+            let msg = e.to_string();
+            if msg.contains("not a database") || msg.contains("encrypted") {
+                return Err(StorageError::AuthenticationFailed);
+            }
+            return Err(StorageError::DatabaseError(msg));
+        }
 
         // Always enforce foreign keys and WAL mode
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -277,6 +317,198 @@ impl EncryptedDatabase {
             tables.push(r?);
         }
         Ok(tables)
+    }
+
+    /// Stores (or replaces) the single primary identity keypair.
+    pub fn store_identity(&self, identity: &StoredIdentity) -> Result<(), StorageError> {
+        let mut public = Vec::with_capacity(64);
+        public.extend_from_slice(&identity.verifying_key);
+        public.extend_from_slice(&identity.dh_public);
+        let mut private = Vec::with_capacity(64);
+        private.extend_from_slice(&identity.signing_key);
+        private.extend_from_slice(&identity.dh_secret);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO identity_keys (key_alias, public_key, private_key, created_at)
+             VALUES ('primary', ?1, ?2, ?3)
+             ON CONFLICT(key_alias) DO UPDATE SET
+                 public_key = excluded.public_key,
+                 private_key = excluded.private_key;",
+            params![public, private, now],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the primary identity keypair, if one was stored.
+    pub fn load_identity(&self) -> Result<Option<StoredIdentity>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT public_key, private_key FROM identity_keys WHERE key_alias = 'primary' LIMIT 1;",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let public: Vec<u8> = row.get(0)?;
+            let private: Vec<u8> = row.get(1)?;
+            if public.len() != 64 || private.len() != 64 {
+                return Err(StorageError::DatabaseError(
+                    "Stored identity has unexpected length".to_string(),
+                ));
+            }
+            let mut verifying_key = [0u8; 32];
+            let mut dh_public = [0u8; 32];
+            let mut signing_key = [0u8; 32];
+            let mut dh_secret = [0u8; 32];
+            verifying_key.copy_from_slice(&public[0..32]);
+            dh_public.copy_from_slice(&public[32..64]);
+            signing_key.copy_from_slice(&private[0..32]);
+            dh_secret.copy_from_slice(&private[32..64]);
+            Ok(Some(StoredIdentity {
+                signing_key,
+                dh_secret,
+                verifying_key,
+                dh_public,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Stores (or replaces) the signed + one-time + Kyber prekey material.
+    /// Kyber rows require a non-null signature column; the bundle signature
+    /// is stored there and ignored on load.
+    pub fn store_prekeys(&self, prekeys: &StoredPrekeys) -> Result<(), StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO prekeys (key_id, public_key, private_key, signature, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(key_id) DO UPDATE SET
+                 public_key = excluded.public_key,
+                 private_key = excluded.private_key,
+                 signature = excluded.signature;",
+            params![
+                prekeys.signed_prekey_id as i64,
+                prekeys.signed_prekey.to_vec(),
+                prekeys.signed_secret.to_vec(),
+                prekeys.signature.to_vec(),
+                now
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO prekeys (key_id, public_key, private_key, signature, created_at)
+             VALUES (?1, ?2, ?3, NULL, ?4)
+             ON CONFLICT(key_id) DO UPDATE SET
+                 public_key = excluded.public_key,
+                 private_key = excluded.private_key,
+                 signature = excluded.signature;",
+            params![
+                prekeys.one_time_prekey_id as i64,
+                prekeys.one_time_prekey.to_vec(),
+                prekeys.one_time_secret.to_vec(),
+                now
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO kyber_prekeys (key_id, public_key, private_key, signature, created_at)
+             VALUES (1, ?1, ?2, ?3, ?4)
+             ON CONFLICT(key_id) DO UPDATE SET
+                 public_key = excluded.public_key,
+                 private_key = excluded.private_key,
+                 signature = excluded.signature;",
+            params![
+                prekeys.kyber_public,
+                prekeys.kyber_secret,
+                prekeys.signature.to_vec(),
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the prekey material, if it was stored. Returns None if any
+    /// of the three rows is missing, so callers regenerate as a set.
+    pub fn load_prekeys(&self) -> Result<Option<StoredPrekeys>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        // Signed prekeys carry a signature, one-time prekeys do not;
+        // scan the table and pick the rows we stored by that marker.
+        let mut stmt = conn.prepare("SELECT key_id, public_key, private_key, signature FROM prekeys;")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Option<Vec<u8>>>(3)?,
+            ))
+        })?;
+        let mut signed: Option<(i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = None;
+        let mut one_time: Option<(i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = None;
+        for r in rows {
+            let (id, pubk, privk, sig) = r?;
+            if sig.is_some() {
+                signed = Some((id, pubk, privk, sig));
+            } else {
+                one_time = Some((id, pubk, privk, sig));
+            }
+        }
+        let (signed_id, signed_pub, signed_priv, signed_sig) = match signed {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let (one_time_id, one_time_pub, one_time_priv, _) = match one_time {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let mut kstmt = conn.prepare(
+            "SELECT public_key, private_key FROM kyber_prekeys WHERE key_id = 1 LIMIT 1;",
+        )?;
+        let mut krows = kstmt.query([])?;
+        let (kyber_public, kyber_secret) = match krows.next()? {
+            Some(row) => (row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?),
+            None => return Ok(None),
+        };
+        if signed_pub.len() != 32
+            || signed_priv.len() != 32
+            || one_time_pub.len() != 32
+            || one_time_priv.len() != 32
+        {
+            return Err(StorageError::DatabaseError(
+                "Stored prekey has unexpected length".to_string(),
+            ));
+        }
+        let signature_vec = signed_sig.unwrap_or_default();
+        if signature_vec.len() != 64 {
+            return Err(StorageError::DatabaseError(
+                "Stored prekey signature has unexpected length".to_string(),
+            ));
+        }
+        let mut signed_prekey = [0u8; 32];
+        let mut signed_secret = [0u8; 32];
+        let mut one_time_prekey = [0u8; 32];
+        let mut one_time_secret = [0u8; 32];
+        let mut signature = [0u8; 64];
+        signed_prekey.copy_from_slice(&signed_pub);
+        signed_secret.copy_from_slice(&signed_priv);
+        one_time_prekey.copy_from_slice(&one_time_pub);
+        one_time_secret.copy_from_slice(&one_time_priv);
+        signature.copy_from_slice(&signature_vec);
+        Ok(Some(StoredPrekeys {
+            signed_prekey_id: signed_id as u32,
+            signed_prekey,
+            signed_secret,
+            signature,
+            one_time_prekey_id: one_time_id as u32,
+            one_time_prekey,
+            one_time_secret,
+            kyber_public,
+            kyber_secret,
+        }))
     }
 
     /// Inserts or updates a conversation record in `conversations` idempotently
