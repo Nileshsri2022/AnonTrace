@@ -47,7 +47,12 @@ android {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                val storeFilePath = keystoreProperties["storeFile"] as String
+                storeFile = if (file(storeFilePath).exists()) {
+                    file(storeFilePath)
+                } else {
+                    rootProject.file(storeFilePath)
+                }
                 storePassword = keystoreProperties["storePassword"] as String
                 enableV1Signing = true
                 enableV2Signing = true
@@ -57,8 +62,10 @@ android {
 
     buildTypes {
         release {
-            if (keystorePropertiesFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
             }
             isMinifyEnabled = false
             isShrinkResources = false

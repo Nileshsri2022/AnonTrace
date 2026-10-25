@@ -125,6 +125,35 @@ jobs:
         working-directory: apps/simple_signal_mobile
         run: flutter pub get
 
+      - name: Configure Android Signing Keystore
+        shell: bash
+        working-directory: apps/simple_signal_mobile/android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "Configuring release signing keystore from secret..."
+            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+            printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=release.jks\n" \
+              "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > key.properties
+          else
+            echo "Generating release signing keystore for automated release..."
+            keytool -genkeypair -v \
+              -keystore release.jks \
+              -alias anontrace \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass anontrace123 \
+              -keypass anontrace123 \
+              -dname "CN=AnonTrace, OU=AnonTrace, O=AnonTrace, L=Unknown, ST=Unknown, C=XX"
+            printf "storePassword=anontrace123\nkeyPassword=anontrace123\nkeyAlias=anontrace\nstoreFile=release.jks\n" > key.properties
+          fi
+
       - name: Build Android Release APK
         working-directory: apps/simple_signal_mobile
         run: flutter build apk --release
